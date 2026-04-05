@@ -1,0 +1,231 @@
+:root {
+  --bg-deep: #080603;
+  --gold-soft: #d7b778;
+  --gold-dim: #8d6a34;
+  --ink-fade: rgba(12, 8, 4, 0.72);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(176, 131, 54, 0.13), transparent 46%),
+    radial-gradient(circle at 85% 10%, rgba(135, 95, 30, 0.1), transparent 38%),
+    linear-gradient(155deg, #0d0905 0%, #090603 52%, #050402 100%);
+}
+
+#sceneCanvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  top: 1.1rem;
+  left: 1.25rem;
+  z-index: 8;
+  pointer-events: none;
+  color: var(--gold-soft);
+  text-shadow:
+    0 0 16px rgba(223, 186, 117, 0.16),
+    0 0 2px rgba(245, 219, 170, 0.4);
+}
+
+#hud h1 {
+  margin: 0;
+  font-family: "Cinzel", "Times New Roman", serif;
+  font-size: clamp(1.28rem, 2.2vw, 1.9rem);
+  letter-spacing: 0.18em;
+  font-weight: 700;
+}
+
+#hud p {
+  margin: 0.2rem 0 0;
+  font-size: clamp(0.76rem, 1.2vw, 0.92rem);
+  opacity: 0.8;
+  letter-spacing: 0.1em;
+}
+
+#photoStage {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+#poiLabel {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10;
+  pointer-events: none;
+  padding: 0.58rem 0.78rem 0.54rem;
+  border: 1px solid rgba(227, 192, 128, 0.5);
+  background:
+    linear-gradient(150deg, rgba(52, 34, 15, 0.9), rgba(28, 18, 8, 0.82));
+  color: #f0d6a4;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.34),
+    inset 0 0 16px rgba(230, 177, 82, 0.09);
+  opacity: 0;
+  transform: translate(-9999px, -9999px);
+  transition: opacity 380ms ease;
+}
+
+#poiLabel::before {
+  content: "";
+  position: absolute;
+  left: -18px;
+  top: 63%;
+  width: 18px;
+  height: 1px;
+  background: rgba(238, 206, 142, 0.82);
+}
+
+#poiLabel span {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  opacity: 0.72;
+}
+
+#poiLabel strong {
+  display: block;
+  margin-top: 0.24rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 14px rgba(255, 218, 146, 0.24);
+}
+
+#poiLabel.show {
+  opacity: 1;
+}
+
+#photo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: clamp(180px, 24vw, 360px);
+  aspect-ratio: 3 / 4;
+  height: auto;
+  object-fit: cover;
+  border: 1px solid rgba(231, 197, 130, 0.4);
+  box-shadow:
+    0 26px 58px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(113, 82, 33, 0.34);
+  filter: contrast(1.06) saturate(1.03) brightness(0.97);
+  transform-origin: center center;
+  transform: translate(-50%, -50%) scale(1);
+  transition:
+    opacity 720ms ease,
+    transform 860ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#photoStage.morphing #photo {
+  opacity: 0.12;
+  transform: translate(-50%, -50%) scale(1.22) rotate(-1.2deg);
+}
+
+#photoStage.done #photo {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.84);
+}
+
+#photoParticles {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 420ms ease;
+}
+
+#photoStage.morphing #photoParticles {
+  opacity: 1;
+}
+
+#photoThumbDock {
+  position: fixed;
+  right: clamp(0.6rem, 2vw, 1.2rem);
+  bottom: clamp(0.6rem, 2.2vw, 1.35rem);
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+  max-height: min(72vh, 520px);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.photoThumb {
+  width: clamp(56px, 7.5vw, 94px);
+  aspect-ratio: 3 / 4;
+  border: 1px solid rgba(231, 197, 130, 0.5);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow:
+    0 9px 22px rgba(0, 0, 0, 0.42),
+    inset 0 0 0 1px rgba(113, 82, 33, 0.28);
+  background: linear-gradient(170deg, rgba(66, 43, 20, 0.88), rgba(22, 14, 7, 0.9));
+  opacity: 0.95;
+  transform-origin: bottom right;
+  transform: translateX(0) scale(1);
+  transition:
+    transform 320ms ease,
+    opacity 320ms ease;
+}
+
+.photoThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  filter: contrast(1.05) saturate(1.02);
+}
+
+.photoThumb.fresh {
+  animation: thumbIn 480ms cubic-bezier(0.21, 0.9, 0.24, 1);
+}
+
+@keyframes thumbIn {
+  from {
+    opacity: 0;
+    transform: translateX(36px) scale(0.5);
+  }
+  to {
+    opacity: 0.95;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+  #hud {
+    top: 0.9rem;
+    left: 0.9rem;
+  }
+
+  #hud h1 {
+    letter-spacing: 0.12em;
+  }
+
+  #photoThumbDock {
+    gap: 0.45rem;
+    max-height: 54vh;
+  }
+}

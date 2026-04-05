@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>暗金羊皮纸 3D 中国地图</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23221408'/%3E%3Cpath d='M10 36 21 24l9 9 11-13 13 15-15 16H19z' fill='%23d7b778'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <canvas id="sceneCanvas"></canvas>
+
+    <div id="hud">
+      <h1>山河暗金图</h1>
+      <p>拖拽旋转 · 滚轮缩放</p>
+    </div>
+
+    <div id="poiLabel" aria-hidden="true">
+      <span>北京市 · 海淀区</span>
+      <strong>海淀大悦信息科技园</strong>
+    </div>
+
+    <div id="photoStage" aria-hidden="true">
+      <img id="photo" src="./data/吴衍标.jpg" alt="portrait" />
+      <canvas id="photoParticles"></canvas>
+    </div>
+
+    <div id="photoThumbDock" aria-hidden="true"></div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
