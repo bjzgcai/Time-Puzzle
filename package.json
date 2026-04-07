@@ -4,9 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "live-server --port=8000 --watch=. --ignore=node_modules --no-browser",
-    "serve": "python3 -m http.server 8000"
+    "serve": "python3 -m http.server 8000",
+    "build:ppt": "node scripts/generate-ppt.js"
   },
   "devDependencies": {
     "live-server": "^1.2.2"
+  },
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
   }
 }

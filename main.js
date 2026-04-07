@@ -14,6 +14,7 @@ const MAP_DEPTH = 1.6;
 const CAMERA_HOME = new THREE.Vector3(0, 42, 69);
 const CONTROL_HOME = new THREE.Vector3(0, 1.4, 0);
 const HAIDIAN_MARKER_ICON_SRC = "./data/aggregation-marker.png";
+const PARTICLE_REFRESH_DEBOUNCE_MS = 120;
 const markerTextureLoader = new THREE.TextureLoader();
 
 const canvas = document.getElementById("sceneCanvas");
@@ -83,6 +84,9 @@ let activeGroupIndex = 0;
 let activePhotoIndex = 0;
 let cycleToken = 0;
 let nextCycleTimerId = 0;
+let particleRefreshRequestId = 0;
+let particleRefreshTimerId = 0;
+let morphCompleteTimerId = 0;
 
 let beijingMarker = null;
 let haidianMarker = null;
@@ -118,6 +122,8 @@ const routeFlight = {
 
 const labelAnchorWorld = new THREE.Vector3();
 const routeTempPoint = new THREE.Vector3();
+const routeTempAhead = new THREE.Vector3();
+const routeTempHeading = new THREE.Vector3();
 
 const morphState = {
   particles: [],
@@ -266,6 +272,44 @@ function clearNextCycleTimer() {
   }
 }
 
+function clearScheduledParticleRefresh() {
+  if (particleRefreshTimerId) {
+    clearTimeout(particleRefreshTimerId);
+    particleRefreshTimerId = 0;
+  }
+}
+
+function clearMorphCompleteTimer() {
+  if (morphCompleteTimerId) {
+    clearTimeout(morphCompleteTimerId);
+    morphCompleteTimerId = 0;
+  }
+}
+
+function nextParticleRefreshRequestId() {
+  particleRefreshRequestId += 1;
+  return particleRefreshRequestId;
+}
+
+async function refreshParticlesNow() {
+  clearScheduledParticleRefresh();
+  const requestId = nextParticleRefreshRequestId();
+  return prepareParticles(requestId);
+}
+
+function scheduleParticleRefresh() {
+  if (morphState.done) {
+    return;
+  }
+
+  const requestId = nextParticleRefreshRequestId();
+  clearScheduledParticleRefresh();
+  particleRefreshTimerId = window.setTimeout(() => {
+    particleRefreshTimerId = 0;
+    prepareParticles(requestId).catch(() => {});
+  }, PARTICLE_REFRESH_DEBOUNCE_MS);
+}
+
 async function startPhotoCycle(index) {
   const total = PHOTO_GROUPS.length;
   if (!total) {
@@ -276,6 +320,9 @@ async function startPhotoCycle(index) {
   const token = cycleToken + 1;
   cycleToken = token;
   clearNextCycleTimer();
+  clearScheduledParticleRefresh();
+  clearMorphCompleteTimer();
+  nextParticleRefreshRequestId();
 
   activeGroupIndex = normalized;
   const activeGroup = getActiveGroup();
@@ -327,7 +374,7 @@ async function startPhotoCycle(index) {
   camera.lookAt(controls.target);
   controls.update();
 
-  await prepareParticles();
+  await refreshParticlesNow();
   if (token !== cycleToken) {
     return;
   }
@@ -358,13 +405,15 @@ async function switchMap(mapMode, { force = false, refreshParticles = true } = {
     haidianMarker = addHaidianMarker();
     const visiblePhotos = getPhotosForCurrentMap(mapMode).filter((photo) => photo?.originCoord);
     originMarkers = visiblePhotos.map((photo, idx) =>
-      addOriginMarker(photo.originCoord, idx, visiblePhotos.length)
+      addOriginMarker(photo.originCoord, idx, visiblePhotos.length, photo, {
+        useThumbnail: true
+      })
     );
     currentMapMode = mapMode;
     updateMapToggleState();
 
     if (refreshParticles && !morphState.done) {
-      await prepareParticles();
+      await refreshParticlesNow();
     } else {
       updatePoiLabelPosition();
     }
@@ -939,7 +988,8 @@ function createHaidianMarkerIcon() {
   return icon;
 }
 
-function addOriginMarker(coord, order = 0, total = 1) {
+function addOriginMarker(coord, order = 0, total = 1, photo = null, options = {}) {
+  const { useThumbnail = false } = options;
   const marker = new THREE.Group();
   marker.position.copy(lonLatToLocalPosition(coord, 0.26));
 
@@ -950,11 +1000,9 @@ function addOriginMarker(coord, order = 0, total = 1) {
     marker.position.z += Math.sin(angle) * radius;
   }
 
-  const core = new THREE.Mesh(
-    new THREE.SphereGeometry(0.27, 18, 18),
-    new THREE.MeshBasicMaterial({ color: 0xaed8ff })
-  );
-  marker.add(core);
+  const icon =
+    useThumbnail && photo?.src ? createOriginThumbnailIcon(photo.src) : createOriginDotIcon();
+  marker.add(icon);
 
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(0.8, 0.045, 8, 36),
@@ -972,6 +1020,62 @@ function addOriginMarker(coord, order = 0, total = 1) {
   return marker;
 }
 
+function createOriginDotIcon() {
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.27, 18, 18),
+    new THREE.MeshBasicMaterial({ color: 0xaed8ff })
+  );
+  return core;
+}
+
+function createOriginThumbnailIcon(photoSrc) {
+  const icon = new THREE.Group();
+  const fallbackCore = createOriginDotIcon();
+  icon.add(fallbackCore);
+
+  const baseHeight = 2.05;
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      alphaTest: 0.04
+    })
+  );
+  sprite.center.set(0.5, 0.08);
+  sprite.position.y = 0.03;
+  sprite.scale.set(baseHeight * 0.86, baseHeight, 1);
+  sprite.renderOrder = 15;
+  icon.add(sprite);
+
+  markerTextureLoader.load(
+    photoSrc,
+    (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      sprite.material.map = texture;
+      sprite.material.opacity = 1;
+      sprite.material.needsUpdate = true;
+      fallbackCore.visible = false;
+
+      const image = texture.image;
+      if (image && image.width && image.height) {
+        const aspect = image.width / image.height;
+        const clampedAspect = THREE.MathUtils.clamp(aspect, 0.62, 1.45);
+        sprite.scale.set(baseHeight * clampedAspect, baseHeight, 1);
+      }
+    },
+    undefined,
+    () => {
+      console.warn(`[marker] 来源缩略图加载失败: ${photoSrc}`);
+    }
+  );
+
+  return icon;
+}
+
 function beijingLocalPosition() {
   return lonLatToLocalPosition(BEIJING_COORD, 0.28);
 }
@@ -985,20 +1089,33 @@ function lonLatToLocalPosition(coord, yOffset = 0.28) {
   );
 }
 
-async function prepareParticles() {
+async function prepareParticles(requestId = particleRefreshRequestId) {
   await ensureImageLoaded(photoEl);
-
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-
-  const sourceCanvas = document.createElement("canvas");
-  sourceCanvas.width = width;
-  sourceCanvas.height = height;
-  const sctx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  if (requestId !== particleRefreshRequestId) {
+    return false;
+  }
 
   const photoRect = getPhotoRect();
-  drawImageCoverInRect(sctx, photoEl, photoRect, resolvePhotoFocus(getActivePhoto()));
-  const data = sctx.getImageData(0, 0, width, height).data;
+  const sourceWidth = Math.max(1, Math.round(photoRect.width));
+  const sourceHeight = Math.max(1, Math.round(photoRect.height));
+
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = sourceWidth;
+  sourceCanvas.height = sourceHeight;
+  const sctx = sourceCanvas.getContext("2d");
+  if (!sctx) {
+    return false;
+  }
+
+  drawImageCoverInRect(
+    sctx,
+    photoEl,
+    { x: 0, y: 0, width: sourceWidth, height: sourceHeight },
+    resolvePhotoFocus(getActivePhoto())
+  );
+  if (requestId !== particleRefreshRequestId) {
+    return false;
+  }
 
   const area = Math.max(1, photoRect.width * photoRect.height);
   const step = Math.max(7, Math.min(14, Math.round(Math.sqrt(area / 4600))));
@@ -1006,21 +1123,13 @@ async function prepareParticles() {
   const target = getMorphTargetScreenPosition();
   const particles = [];
 
-  const minX = Math.max(0, Math.floor(photoRect.x));
-  const minY = Math.max(0, Math.floor(photoRect.y));
-  const maxX = Math.min(width - 1, Math.ceil(photoRect.x + photoRect.width));
-  const maxY = Math.min(height - 1, Math.ceil(photoRect.y + photoRect.height));
+  const maxX = Math.max(0, sourceWidth - 1);
+  const maxY = Math.max(0, sourceHeight - 1);
 
-  for (let y = minY; y <= maxY; y += step) {
-    for (let x = minX; x <= maxX; x += step) {
-      const idx = (y * width + x) * 4;
-      const a = data[idx + 3];
-      if (a < 70) {
-        continue;
-      }
-
-      const startX = x + (Math.random() - 0.5) * 1.8;
-      const startY = y + (Math.random() - 0.5) * 1.8;
+  for (let y = 0; y <= maxY; y += step) {
+    for (let x = 0; x <= maxX; x += step) {
+      const startX = photoRect.x + x + (Math.random() - 0.5) * 1.8;
+      const startY = photoRect.y + y + (Math.random() - 0.5) * 1.8;
 
       const dx = target.x - startX;
       const dy = target.y - startY;
@@ -1029,8 +1138,8 @@ async function prepareParticles() {
       const curveLift = (Math.random() - 0.5) * 210;
       const cellW = Math.max(3, Math.round(step * (0.85 + Math.random() * 1.35)));
       const cellH = Math.max(3, Math.round(step * (0.85 + Math.random() * 1.35)));
-      const sx = Math.max(0, Math.min(width - cellW, Math.round(x - cellW * 0.5)));
-      const sy = Math.max(0, Math.min(height - cellH, Math.round(y - cellH * 0.5)));
+      const sx = Math.max(0, Math.min(sourceWidth - cellW, Math.round(x - cellW * 0.5)));
+      const sy = Math.max(0, Math.min(sourceHeight - cellH, Math.round(y - cellH * 0.5)));
 
       const c1 = {
         x: startX + dx * 0.35 + Math.cos(angle + Math.PI / 2) * swirl,
@@ -1064,8 +1173,13 @@ async function prepareParticles() {
     }
   }
 
+  if (requestId !== particleRefreshRequestId) {
+    return false;
+  }
+
   morphState.sourceCanvas = sourceCanvas;
   morphState.particles = particles;
+  return true;
 }
 
 function runIntroSequence() {
@@ -1129,7 +1243,7 @@ function clearThumbnailDock() {
 }
 
 function drawMorphFrame(now) {
-  if (morphState.done) {
+  if (morphState.done || morphState.startedAt <= 0) {
     return;
   }
 
@@ -1233,7 +1347,13 @@ function drawMorphFrame(now) {
     photoStage.classList.remove("morphing");
     photoStage.classList.add("done");
 
-    setTimeout(() => {
+    const doneToken = cycleToken;
+    clearMorphCompleteTimer();
+    morphCompleteTimerId = window.setTimeout(() => {
+      morphCompleteTimerId = 0;
+      if (doneToken !== cycleToken) {
+        return;
+      }
       pinActiveGroupThumbnails();
       photoStage.style.display = "none";
       introFinished = true;
@@ -1252,7 +1372,7 @@ function startRouteAfterMorph(startTime = performance.now()) {
   return startChinaFlightToBeijing(startTime);
 }
 
-function buildRouteFlightEntry(start, end, order = 0, total = 1) {
+function buildRouteFlightEntry(start, end, order = 0, total = 1, photo = null) {
   const p0 = start.clone();
   const p3 = end.clone();
 
@@ -1298,14 +1418,174 @@ function buildRouteFlightEntry(start, end, order = 0, total = 1) {
   );
   mapRoot.add(trail);
 
-  const mover = new THREE.Mesh(
-    new THREE.SphereGeometry(0.23, 16, 16),
-    new THREE.MeshBasicMaterial({ color })
-  );
+  const mover = createRouteAvatarMover(photo, color, order);
   mover.position.copy(p0);
   mapRoot.add(mover);
 
-  return { p0, p1, p2, p3, mover, trail };
+  return { p0, p1, p2, p3, mover, trail, spinOffset: mover.userData.spinOffset ?? 0 };
+}
+
+function createRouteAvatarMover(photo, accentColor, order = 0) {
+  const mover = new THREE.Group();
+  mover.userData.spinOffset = order * 0.86 + Math.random() * Math.PI;
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.78, 0.052, 10, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xaecfff,
+      transparent: true,
+      opacity: 0.54,
+      depthWrite: false
+    })
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.06;
+  mover.add(ring);
+  mover.userData.ring = ring;
+
+  const trailingRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.56, 0.038, 8, 40),
+    new THREE.MeshBasicMaterial({
+      color: accentColor,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false
+    })
+  );
+  trailingRing.rotation.x = Math.PI / 2;
+  trailingRing.position.set(0.24, 0.06, -0.18);
+  mover.add(trailingRing);
+  mover.userData.trailingRing = trailingRing;
+
+  const avatarRig = new THREE.Group();
+  avatarRig.position.y = 0.94;
+  mover.add(avatarRig);
+  mover.userData.avatarRig = avatarRig;
+
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.62, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.25,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    })
+  );
+  shadow.position.set(0.05, -0.03, -0.04);
+  avatarRig.add(shadow);
+
+  const backPlate = new THREE.Mesh(
+    new THREE.CircleGeometry(0.62, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.97,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    })
+  );
+  avatarRig.add(backPlate);
+
+  const ghostPlate = new THREE.Mesh(
+    new THREE.CircleGeometry(0.5, 40),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.33,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    })
+  );
+  ghostPlate.position.set(0.28, 0.02, -0.06);
+  avatarRig.add(ghostPlate);
+
+  const fallbackCore = new THREE.Mesh(
+    new THREE.SphereGeometry(0.31, 20, 20),
+    new THREE.MeshBasicMaterial({
+      color: 0xb0d5ff,
+      transparent: true,
+      opacity: 0.9
+    })
+  );
+  fallbackCore.position.z = 0.04;
+  avatarRig.add(fallbackCore);
+
+  const avatar = new THREE.Mesh(
+    new THREE.CircleGeometry(0.56, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      alphaTest: 0.04,
+      side: THREE.DoubleSide
+    })
+  );
+  avatar.position.z = 0.05;
+  avatarRig.add(avatar);
+
+  const photoSrc = photo?.src;
+  if (!photoSrc) {
+    return mover;
+  }
+
+  markerTextureLoader.load(
+    photoSrc,
+    (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      const circularTexture = createCircularAvatarTexture(texture.image, resolvePhotoFocus(photo));
+      const finalTexture = circularTexture ?? texture;
+      finalTexture.colorSpace = THREE.SRGBColorSpace;
+      finalTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      avatar.material.map = finalTexture;
+      avatar.material.opacity = 1;
+      avatar.material.needsUpdate = true;
+      fallbackCore.visible = false;
+
+      if (finalTexture !== texture) {
+        texture.dispose();
+      }
+    },
+    undefined,
+    () => {
+      console.warn(`[marker] 路径头像加载失败: ${photoSrc}`);
+    }
+  );
+
+  return mover;
+}
+
+function createCircularAvatarTexture(image, focus = { x: 50, y: 50 }) {
+  if (!image || !(image.width || image.naturalWidth) || !(image.height || image.naturalHeight)) {
+    return null;
+  }
+
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return null;
+  }
+
+  ctx.clearRect(0, 0, size, size);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(size * 0.5, size * 0.5, size * 0.48, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  drawImageCover(ctx, image, 0, 0, size, size, focus);
+  ctx.restore();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 function startChinaFlightToBeijing(startTime = performance.now()) {
@@ -1314,9 +1594,16 @@ function startChinaFlightToBeijing(startTime = performance.now()) {
   }
 
   clearRouteFlightVisuals();
+  const visiblePhotos = getPhotosForCurrentMap("china").filter((photo) => photo?.originCoord);
 
   routeFlight.flights = originMarkers.map((originMarker, idx) =>
-    buildRouteFlightEntry(originMarker.position, beijingMarker.position, idx, originMarkers.length)
+    buildRouteFlightEntry(
+      originMarker.position,
+      beijingMarker.position,
+      idx,
+      originMarkers.length,
+      visiblePhotos[idx] ?? null
+    )
   );
   if (!routeFlight.flights.length) {
     return false;
@@ -1334,9 +1621,16 @@ function startBeijingFlightToHaidian(startTime = performance.now()) {
   }
 
   clearRouteFlightVisuals();
+  const visiblePhotos = getPhotosForCurrentMap("beijing").filter((photo) => photo?.originCoord);
 
   routeFlight.flights = originMarkers.map((originMarker, idx) =>
-    buildRouteFlightEntry(originMarker.position, haidianMarker.position, idx, originMarkers.length)
+    buildRouteFlightEntry(
+      originMarker.position,
+      haidianMarker.position,
+      idx,
+      originMarkers.length,
+      visiblePhotos[idx] ?? null
+    )
   );
   if (!routeFlight.flights.length) {
     return false;
@@ -1369,6 +1663,39 @@ function updateRouteFlight(now) {
 
     cubicBezierVec3(flight.p0, flight.p1, flight.p2, flight.p3, eased, routeTempPoint);
     flight.mover.position.copy(routeTempPoint);
+    const spinOffset = flight.spinOffset ?? 0;
+    flight.mover.position.y += Math.sin(now * 0.008 + spinOffset) * 0.06;
+
+    cubicBezierVec3(
+      flight.p0,
+      flight.p1,
+      flight.p2,
+      flight.p3,
+      Math.min(1, eased + 0.018),
+      routeTempAhead
+    );
+    routeTempHeading.subVectors(routeTempAhead, routeTempPoint);
+    routeTempHeading.y = 0;
+    if (routeTempHeading.lengthSq() > 1e-6) {
+      flight.mover.rotation.y = Math.atan2(routeTempHeading.x, routeTempHeading.z);
+    }
+
+    const avatarRig = flight.mover.userData.avatarRig;
+    if (avatarRig) {
+      avatarRig.rotation.y = Math.sin(now * 0.0045 + spinOffset) * 0.45;
+    }
+
+    const ring = flight.mover.userData.ring;
+    if (ring) {
+      ring.scale.setScalar(1 + Math.sin(now * 0.008 + spinOffset) * 0.1);
+      ring.material.opacity = 0.46 + Math.sin(now * 0.007 + spinOffset) * 0.18;
+    }
+
+    const trailingRing = flight.mover.userData.trailingRing;
+    if (trailingRing) {
+      trailingRing.scale.setScalar(1 + Math.sin(now * 0.009 + spinOffset + 0.7) * 0.12);
+      trailingRing.material.opacity = 0.3 + Math.sin(now * 0.0075 + spinOffset + 0.9) * 0.14;
+    }
 
     const points = [];
     const segs = Math.max(16, Math.round(66 * eased));
@@ -1395,20 +1722,58 @@ function handleArrivalAtBeijing(startTime = performance.now()) {
     return;
   }
 
+  if (!shouldFocusAggregationMarkerNow()) {
+    skipAggregationMarkerFocusAndContinue();
+    return;
+  }
+
   if (ROUTE_VIEW_MODE === "two-stage" && currentMapMode !== "beijing") {
     stage2TransitionPending = true;
     switchMap("beijing", { force: true, refreshParticles: false })
+      .then(() => {
+        startHaidianFlyIn(performance.now());
+      })
       .catch((err) => {
         console.error(err);
+        recoverFromStage2TransitionFailure();
       })
       .finally(() => {
         stage2TransitionPending = false;
-        startHaidianFlyIn(performance.now());
       });
     return;
   }
 
   startHaidianFlyIn(startTime);
+}
+
+function shouldFocusAggregationMarkerNow() {
+  const activeGroup = getActiveGroup();
+  if (!activeGroup?.indices?.length || !PHOTO_SET.length) {
+    return false;
+  }
+
+  const lastIndexInGroup = activeGroup.indices[activeGroup.indices.length - 1];
+  return lastIndexInGroup >= PHOTO_SET.length - 1;
+}
+
+function skipAggregationMarkerFocusAndContinue() {
+  cameraFlight.active = false;
+  cameraFlight.completed = false;
+  controls.enabled = true;
+  controls.autoRotate = !userMoved;
+  setMapToggleEnabled(true);
+  updateMapToggleState();
+  queueNextPhotoCycle();
+}
+
+function recoverFromStage2TransitionFailure() {
+  cameraFlight.active = false;
+  cameraFlight.completed = false;
+  controls.enabled = true;
+  controls.autoRotate = !userMoved;
+  setMapToggleEnabled(true);
+  updateMapToggleState();
+  queueNextPhotoCycle();
 }
 
 function clearRouteFlightVisuals() {
@@ -1706,8 +2071,29 @@ function ensureImageLoaded(img) {
   }
 
   return new Promise((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = reject;
+    const handleLoad = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error(`图片加载失败: ${img.currentSrc || img.src}`));
+    };
+    const cleanup = () => {
+      img.removeEventListener("load", handleLoad);
+      img.removeEventListener("error", handleError);
+    };
+
+    img.addEventListener("load", handleLoad, { once: true });
+    img.addEventListener("error", handleError, { once: true });
+
+    if (img.complete) {
+      if (img.naturalWidth > 0) {
+        handleLoad();
+      } else {
+        handleError();
+      }
+    }
   });
 }
 
@@ -1757,7 +2143,7 @@ function onResize() {
   resizeParticleCanvas();
 
   if (!morphState.done) {
-    prepareParticles().catch(() => {});
+    scheduleParticleRefresh();
   }
 
   updatePoiLabelPosition();
