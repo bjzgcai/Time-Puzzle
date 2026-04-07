@@ -13,6 +13,8 @@ import {
 const MAP_DEPTH = 1.6;
 const CAMERA_HOME = new THREE.Vector3(0, 42, 69);
 const CONTROL_HOME = new THREE.Vector3(0, 1.4, 0);
+const HAIDIAN_MARKER_ICON_SRC = "./data/aggregation-marker.png";
+const markerTextureLoader = new THREE.TextureLoader();
 
 const canvas = document.getElementById("sceneCanvas");
 const renderer = new THREE.WebGLRenderer({
@@ -69,6 +71,7 @@ const mapMeta = {
   shift: new THREE.Vector3()
 };
 const geoJsonCache = new Map();
+const groupStagePhotoSrcCache = new Map();
 const PHOTO_GROUPS = buildPhotoGroups(PHOTO_SET);
 
 let currentMapMode = "china";
@@ -118,6 +121,7 @@ const routeTempPoint = new THREE.Vector3();
 
 const morphState = {
   particles: [],
+  sourceCanvas: null,
   active: false,
   startedAt: 0,
   holdMs: 1200,
@@ -141,13 +145,32 @@ async function init() {
   animate();
 }
 
+function normalizeDisplayText(value, fallback = "") {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+
+  const unquoted = trimmed.replace(/^['"]+|['"]+$/g, "").trim();
+  const lowered = unquoted.toLowerCase();
+  if (!unquoted || lowered === "undefined" || lowered === "null" || lowered === "nan") {
+    return fallback;
+  }
+
+  return trimmed;
+}
+
 function buildPhotoGroups(photos) {
   const groups = [];
   let currentGroup = null;
 
   for (let i = 0; i < photos.length; i += 1) {
     const photo = photos[i];
-    const date = photo?.date ?? "unknown-date";
+    const date = normalizeDisplayText(photo?.date, "unknown-date");
     if (!currentGroup || currentGroup.date !== date) {
       currentGroup = {
         date,
@@ -195,22 +218,40 @@ function getPhotosForCurrentMap(mapMode = currentMapMode) {
   return group.photos.filter((photo) => !isBeijingOrigin(photo));
 }
 
-function applyActivePhoto() {
+async function applyActivePhoto() {
   const activeGroup = getActiveGroup();
   const photo = getActivePhoto();
   if (!photo) {
     return;
   }
 
-  photoEl.src = photo.src;
-  photoEl.alt = `${photo.name}（${photo.originCity}，入职 ${photo.date}）`;
+  const safeNames = (activeGroup?.photos ?? [photo])
+    .map((item) => normalizeDisplayText(item?.name, "未命名成员"))
+    .filter(Boolean);
+  const safeName = safeNames[0] ?? "未命名成员";
+  const nameText = safeNames.length > 1 ? safeNames.join("、") : safeName;
+
+  const safeOrigins = (activeGroup?.photos ?? [photo])
+    .map((item) => normalizeDisplayText(item?.originCity, "来源地未设置"))
+    .filter(Boolean);
+  const uniqueOrigins = [...new Set(safeOrigins)];
+  const safeOrigin = uniqueOrigins[0] ?? "来源地未设置";
+  const safeDate = normalizeDisplayText(photo.date, "日期未设置");
+
+  const stagePhotoSrc = await resolveStagePhotoSrc(activeGroup, photo);
+  photoEl.src = stagePhotoSrc;
+  const focus = resolvePhotoFocus(photo);
+  photoEl.style.objectPosition = `${focus.x}% ${focus.y}%`;
+  photoEl.alt = `${nameText}（${safeOrigin}，入职 ${safeDate}）`;
 
   const hudHint = document.querySelector("#hud p");
   if (hudHint) {
     const modeText = ROUTE_VIEW_MODE === "two-stage" ? "双阶段" : "单地图";
     const memberCount = activeGroup?.photos?.length ?? 1;
-    const originText = memberCount > 1 ? `${photo.originCity} 等${memberCount}人` : photo.originCity;
-    hudHint.textContent = `${photo.date} · ${originText} → 北京市（${modeText}） · 拖拽旋转 · 滚轮缩放`;
+    const originText =
+      uniqueOrigins.length > 1 ? `${safeOrigin} 等${uniqueOrigins.length}地` : safeOrigin;
+    const whoText = memberCount > 1 ? nameText : safeName;
+    hudHint.textContent = `${safeDate} · ${whoText} · ${originText} → 北京市（${modeText}） · 拖拽旋转 · 滚轮缩放`;
   }
 
   if (poiLabel) {
@@ -253,6 +294,7 @@ async function startPhotoCycle(index) {
   morphState.done = false;
   morphState.sparkle = 0;
   morphState.particles = [];
+  morphState.sourceCanvas = null;
 
   photoStage.style.display = "";
   photoStage.classList.remove("done", "morphing");
@@ -269,7 +311,11 @@ async function startPhotoCycle(index) {
   controls.maxDistance = 108;
   setMapToggleEnabled(false);
 
-  applyActivePhoto();
+  await applyActivePhoto();
+  if (token !== cycleToken) {
+    return;
+  }
+
   const startMapMode = getGroupStartMapMode(activeGroup);
   await switchMap(startMapMode, { force: true, refreshParticles: false });
   if (token !== cycleToken) {
@@ -810,18 +856,8 @@ function addHaidianMarker() {
   const marker = new THREE.Group();
   marker.position.copy(lonLatToLocalPosition(HAIDIAN_PARK_COORD, 0.32));
 
-  const pin = new THREE.Mesh(
-    new THREE.ConeGeometry(0.24, 1.28, 20),
-    new THREE.MeshStandardMaterial({
-      color: 0xffdda2,
-      emissive: 0x5b300d,
-      emissiveIntensity: 0.85,
-      roughness: 0.42,
-      metalness: 0.25
-    })
-  );
-  pin.position.y = 0.68;
-  marker.add(pin);
+  const icon = createHaidianMarkerIcon();
+  marker.add(icon);
 
   const halo = new THREE.Mesh(
     new THREE.TorusGeometry(1.36, 0.052, 8, 48),
@@ -843,6 +879,64 @@ function addHaidianMarker() {
   mapRoot.add(marker);
 
   return marker;
+}
+
+function createHaidianMarkerIcon() {
+  const icon = new THREE.Group();
+
+  const fallbackCore = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.34, 0),
+    new THREE.MeshStandardMaterial({
+      color: 0xffdda2,
+      emissive: 0x5b300d,
+      emissiveIntensity: 0.82,
+      roughness: 0.42,
+      metalness: 0.24
+    })
+  );
+  fallbackCore.position.y = 0.62;
+  icon.add(fallbackCore);
+
+  const baseHeight = 3.2;
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      alphaTest: 0.04
+    })
+  );
+  sprite.center.set(0.5, 0.03);
+  sprite.position.y = 0.02;
+  sprite.scale.set(baseHeight * 0.88, baseHeight, 1);
+  sprite.renderOrder = 16;
+  icon.add(sprite);
+
+  markerTextureLoader.load(
+    HAIDIAN_MARKER_ICON_SRC,
+    (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+      sprite.material.map = texture;
+      sprite.material.opacity = 1;
+      sprite.material.needsUpdate = true;
+      fallbackCore.visible = false;
+
+      const image = texture.image;
+      if (image && image.width && image.height) {
+        const aspect = image.width / image.height;
+        sprite.scale.set(baseHeight * aspect, baseHeight, 1);
+      }
+    },
+    undefined,
+    () => {
+      console.warn(`[marker] 聚合点图标加载失败: ${HAIDIAN_MARKER_ICON_SRC}`);
+    }
+  );
+
+  return icon;
 }
 
 function addOriginMarker(coord, order = 0, total = 1) {
@@ -902,26 +996,28 @@ async function prepareParticles() {
   sourceCanvas.height = height;
   const sctx = sourceCanvas.getContext("2d", { willReadFrequently: true });
 
-  drawImageCoverInRect(sctx, photoEl, getPhotoRect());
+  const photoRect = getPhotoRect();
+  drawImageCoverInRect(sctx, photoEl, photoRect, resolvePhotoFocus(getActivePhoto()));
   const data = sctx.getImageData(0, 0, width, height).data;
 
-  const area = width * height;
-  const step = Math.max(5, Math.min(11, Math.round(Math.sqrt(area / 10500))));
+  const area = Math.max(1, photoRect.width * photoRect.height);
+  const step = Math.max(7, Math.min(14, Math.round(Math.sqrt(area / 4600))));
 
   const target = getMorphTargetScreenPosition();
   const particles = [];
 
-  for (let y = 0; y < height; y += step) {
-    for (let x = 0; x < width; x += step) {
+  const minX = Math.max(0, Math.floor(photoRect.x));
+  const minY = Math.max(0, Math.floor(photoRect.y));
+  const maxX = Math.min(width - 1, Math.ceil(photoRect.x + photoRect.width));
+  const maxY = Math.min(height - 1, Math.ceil(photoRect.y + photoRect.height));
+
+  for (let y = minY; y <= maxY; y += step) {
+    for (let x = minX; x <= maxX; x += step) {
       const idx = (y * width + x) * 4;
       const a = data[idx + 3];
       if (a < 70) {
         continue;
       }
-
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
 
       const startX = x + (Math.random() - 0.5) * 1.8;
       const startY = y + (Math.random() - 0.5) * 1.8;
@@ -929,8 +1025,12 @@ async function prepareParticles() {
       const dx = target.x - startX;
       const dy = target.y - startY;
       const angle = Math.atan2(dy, dx);
-      const swirl = 20 + Math.random() * 110;
-      const curveLift = (Math.random() - 0.5) * 150;
+      const swirl = 46 + Math.random() * 136;
+      const curveLift = (Math.random() - 0.5) * 210;
+      const cellW = Math.max(3, Math.round(step * (0.85 + Math.random() * 1.35)));
+      const cellH = Math.max(3, Math.round(step * (0.85 + Math.random() * 1.35)));
+      const sx = Math.max(0, Math.min(width - cellW, Math.round(x - cellW * 0.5)));
+      const sy = Math.max(0, Math.min(height - cellH, Math.round(y - cellH * 0.5)));
 
       const c1 = {
         x: startX + dx * 0.35 + Math.cos(angle + Math.PI / 2) * swirl,
@@ -943,19 +1043,28 @@ async function prepareParticles() {
       };
 
       particles.push({
+        sx,
+        sy,
+        sw: cellW,
+        sh: cellH,
         startX,
         startY,
         c1,
         c2,
-        r,
-        g,
-        b,
-        size: 1 + Math.random() * 1.5,
-        offset: Math.random() * 0.08
+        offset: Math.random() * 0.14,
+        wobbleAmp: 5 + Math.random() * 26,
+        wobbleFreq: 1.2 + Math.random() * 3.3,
+        phase: Math.random() * Math.PI * 2,
+        twist: (Math.random() - 0.5) * Math.PI * 1.7,
+        spin: (Math.random() - 0.5) * 0.62,
+        warpAmp: 0.08 + Math.random() * 0.44,
+        alpha: 0.64 + Math.random() * 0.34,
+        trail: Math.random()
       });
     }
   }
 
+  morphState.sourceCanvas = sourceCanvas;
   morphState.particles = particles;
 }
 
@@ -988,7 +1097,9 @@ function pinCurrentPhotoThumbnail(photoIndex = activePhotoIndex) {
 
   const img = document.createElement("img");
   img.src = photo.src;
-  img.alt = `${photo.name} 缩略图`;
+  const focus = resolvePhotoFocus(photo);
+  img.style.objectPosition = `${focus.x}% ${focus.y}%`;
+  img.alt = `${normalizeDisplayText(photo.name, "未命名成员")} 缩略图`;
   thumb.appendChild(img);
 
   photoThumbDock.appendChild(thumb);
@@ -1039,23 +1150,65 @@ function drawMorphFrame(now) {
 
   const target = getMorphTargetScreenPosition();
   pctx.clearRect(0, 0, particleCanvas.width, particleCanvas.height);
+  pctx.globalCompositeOperation = "source-over";
+  pctx.imageSmoothingEnabled = true;
 
-  pctx.globalCompositeOperation = "lighter";
+  const sourceCanvas = morphState.sourceCanvas;
+  if (sourceCanvas) {
+    for (const p of morphState.particles) {
+      const tt = THREE.MathUtils.clamp(eased + p.offset * (1 - eased), 0, 1);
+      const remain = 1 - tt;
 
-  for (const p of morphState.particles) {
-    const tt = THREE.MathUtils.clamp(eased + p.offset * (1 - eased), 0, 1);
+      const x = cubicBezier(p.startX, p.c1.x, p.c2.x, target.x, tt);
+      const y = cubicBezier(p.startY, p.c1.y, p.c2.y, target.y, tt);
+      const phase = now * 0.0031 + p.phase + tt * Math.PI * 2.8;
+      const wobbleX = Math.sin(phase * p.wobbleFreq) * p.wobbleAmp * remain;
+      const wobbleY = Math.cos(phase * (0.62 + p.wobbleFreq * 0.42)) * p.wobbleAmp * 0.4 * remain;
+      const drawX = x + wobbleX;
+      const drawY = y + wobbleY;
 
-    const x = cubicBezier(p.startX, p.c1.x, p.c2.x, target.x, tt);
-    const y = cubicBezier(p.startY, p.c1.y, p.c2.y, target.y, tt);
+      const baseScale = Math.max(0.2, 1 - tt * 0.82);
+      const warp = 1 + Math.sin(phase * 1.28) * p.warpAmp * remain;
+      const scaleX = Math.max(0.16, baseScale * (0.92 + (warp - 1) * 1.1));
+      const scaleY = Math.max(0.16, baseScale * (1.02 - (warp - 1) * 0.72));
+      const rotation = p.twist * remain + p.spin * tt * Math.PI * 2;
+      const alpha = Math.max(0.03, p.alpha * (1 - tt * 0.9));
 
-    const size = Math.max(0.45, p.size * (1 - tt * 0.86));
-    const alpha = Math.max(0.05, 0.95 - tt * 0.9);
+      pctx.globalAlpha = alpha;
+      pctx.save();
+      pctx.translate(drawX, drawY);
+      pctx.rotate(rotation);
+      pctx.scale(scaleX, scaleY);
+      pctx.drawImage(
+        sourceCanvas,
+        p.sx,
+        p.sy,
+        p.sw,
+        p.sh,
+        -p.sw * 0.5,
+        -p.sh * 0.5,
+        p.sw,
+        p.sh
+      );
+      pctx.restore();
 
-    pctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${alpha})`;
-    pctx.fillRect(x, y, size, size);
+      if (p.trail > 0.68 && tt < 0.96) {
+        const prevT = Math.max(0, tt - 0.08);
+        const prevX = cubicBezier(p.startX, p.c1.x, p.c2.x, target.x, prevT);
+        const prevY = cubicBezier(p.startY, p.c1.y, p.c2.y, target.y, prevT);
+        pctx.globalAlpha = alpha * 0.4 * remain;
+        pctx.strokeStyle = "rgba(255, 203, 124, 1)";
+        pctx.lineWidth = Math.max(0.5, (p.sw + p.sh) * 0.045 * remain);
+        pctx.beginPath();
+        pctx.moveTo(prevX, prevY);
+        pctx.lineTo(drawX, drawY);
+        pctx.stroke();
+      }
+    }
   }
 
-  const glowRadius = 6 + (1 - eased) * 22;
+  pctx.globalCompositeOperation = "lighter";
+  const glowRadius = 7 + (1 - eased) * 27;
   const glow = pctx.createRadialGradient(
     target.x,
     target.y,
@@ -1072,6 +1225,8 @@ function drawMorphFrame(now) {
   pctx.beginPath();
   pctx.arc(target.x, target.y, glowRadius, 0, Math.PI * 2);
   pctx.fill();
+  pctx.globalCompositeOperation = "source-over";
+  pctx.globalAlpha = 1;
 
   if (t >= 1) {
     morphState.done = true;
@@ -1381,15 +1536,145 @@ function updatePoiLabelPosition() {
   poiLabel.style.transform = `translate(${x}px, ${y}px) translate(24px, -58px)`;
 }
 
-function drawImageCoverInRect(ctx, image, rect) {
-  const iw = image.naturalWidth;
-  const ih = image.naturalHeight;
-  const scale = Math.max(rect.width / iw, rect.height / ih);
-  const dw = iw * scale;
-  const dh = ih * scale;
-  const dx = rect.x + (rect.width - dw) / 2;
-  const dy = rect.y + (rect.height - dh) / 2;
-  ctx.drawImage(image, dx, dy, dw, dh);
+function drawImageCover(ctx, image, dx, dy, dw, dh, focus = { x: 50, y: 50 }) {
+  const iw = image.naturalWidth || image.width || 1;
+  const ih = image.naturalHeight || image.height || 1;
+  const scale = Math.max(dw / iw, dh / ih);
+  const drawW = iw * scale;
+  const drawH = ih * scale;
+  const fx = THREE.MathUtils.clamp((focus?.x ?? 50) / 100, 0, 1);
+  const fy = THREE.MathUtils.clamp((focus?.y ?? 50) / 100, 0, 1);
+  const offsetX = dx + (dw - drawW) * fx;
+  const offsetY = dy + (dh - drawH) * fy;
+  ctx.drawImage(image, offsetX, offsetY, drawW, drawH);
+}
+
+function resolvePhotoFocus(photo) {
+  return {
+    x: resolvePercent(photo?.focus?.x, 50),
+    y: resolvePercent(photo?.focus?.y, 50)
+  };
+}
+
+function resolvePercent(value, fallback) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return THREE.MathUtils.clamp(parsed, 0, 100);
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`图片加载失败: ${src}`));
+    img.src = src;
+  });
+}
+
+function getStageCollageLayout(count) {
+  if (count <= 1) {
+    return { cols: 1, rows: 1 };
+  }
+
+  if (count === 2) {
+    return { cols: 2, rows: 1 };
+  }
+
+  const cols = Math.min(3, Math.ceil(Math.sqrt(count)));
+  const rows = Math.ceil(count / cols);
+  return { cols, rows };
+}
+
+async function resolveStagePhotoSrc(group, fallbackPhoto) {
+  const photos = group?.photos?.length ? group.photos : fallbackPhoto ? [fallbackPhoto] : [];
+  if (!photos.length) {
+    return fallbackPhoto?.src ?? "";
+  }
+
+  if (photos.length === 1) {
+    return photos[0].src;
+  }
+
+  const cacheKey = photos.map((photo) => photo?.src ?? "").join("|");
+  if (groupStagePhotoSrcCache.has(cacheKey)) {
+    return groupStagePhotoSrcCache.get(cacheKey);
+  }
+
+  const stageWidth = 900;
+  const stageHeight = 1200;
+  const gap = 14;
+  const canvas = document.createElement("canvas");
+  canvas.width = stageWidth;
+  canvas.height = stageHeight;
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) {
+    return photos[0].src;
+  }
+
+  const loaded = await Promise.all(
+    photos.map(async (photo) => {
+      try {
+        return await loadImageElement(photo.src);
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  ctx.fillStyle = "#1c1208";
+  ctx.fillRect(0, 0, stageWidth, stageHeight);
+
+  const { cols, rows } = getStageCollageLayout(photos.length);
+  const cellW = (stageWidth - gap * (cols + 1)) / cols;
+  const cellH = (stageHeight - gap * (rows + 1)) / rows;
+
+  for (let i = 0; i < photos.length; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    if (row >= rows) {
+      break;
+    }
+
+    const x = gap + col * (cellW + gap);
+    const y = gap + row * (cellH + gap);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, cellW, cellH);
+    ctx.clip();
+
+    const image = loaded[i];
+    if (image) {
+      drawImageCover(ctx, image, x, y, cellW, cellH, resolvePhotoFocus(photos[i]));
+    } else {
+      ctx.fillStyle = "#3d2813";
+      ctx.fillRect(x, y, cellW, cellH);
+      ctx.fillStyle = "#f2d29a";
+      ctx.font = "600 34px 'Noto Serif SC', serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const fallbackName = normalizeDisplayText(photos[i]?.name, "成员");
+      ctx.fillText(fallbackName, x + cellW / 2, y + cellH / 2);
+    }
+
+    ctx.restore();
+  }
+
+  ctx.strokeStyle = "rgba(231, 197, 130, 0.42)";
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, stageWidth - 6, stageHeight - 6);
+
+  const compositeSrc = canvas.toDataURL("image/jpeg", 0.92);
+  groupStagePhotoSrcCache.set(cacheKey, compositeSrc);
+  return compositeSrc;
+}
+
+function drawImageCoverInRect(ctx, image, rect, focus = { x: 50, y: 50 }) {
+  drawImageCover(ctx, image, rect.x, rect.y, rect.width, rect.height, focus);
 }
 
 function getPhotoRect() {

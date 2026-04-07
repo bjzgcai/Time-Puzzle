@@ -25,23 +25,32 @@ This project is a static Three.js web experience that shows:
 |-- Beijing.geojson
 `-- data/
     |-- dataset.js
-    |-- dataset.ts
     `-- *.jpg / *.png
 ```
 
 ## Run Locally
 
-Use a local HTTP server (recommended). Opening `index.html` directly with `file://` may break `fetch()` for GeoJSON.
+Use a local dev server. Opening `index.html` directly with `file://` may break `fetch()` for GeoJSON.
 
 ```bash
 cd /home/carter/working/people
-python3 -m http.server 8000
+npm install
+npm run dev
 ```
 
 Then open:
 
 ```text
 http://localhost:8000
+```
+
+`npm run dev` uses `live-server`, which automatically reloads the browser when you change files.
+If port `8000` is already occupied, `live-server` will print and use another available port.
+
+If you only need a basic static server without auto reload:
+
+```bash
+npm run serve
 ```
 
 ## Configure Content
@@ -52,8 +61,6 @@ Edit `data/dataset.js` (runtime config used by `main.js`):
 - `ROUTE_VIEW_MODE`: `"two-stage"` or `"single-map"`
 - `DESTINATION_NAME`: Label text for destination
 - `MAP_SOURCES`: Local/remote GeoJSON sources and map labels
-
-`data/dataset.ts` mirrors the same data with TypeScript types.
 
 ## Interaction and Behavior
 
