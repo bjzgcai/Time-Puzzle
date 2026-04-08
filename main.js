@@ -14,7 +14,6 @@ const MAP_DEPTH = 1.6;
 const CAMERA_HOME = new THREE.Vector3(0, 42, 69);
 const CONTROL_HOME = new THREE.Vector3(0, 1.4, 0);
 const HAIDIAN_MARKER_ICON_SRC = "./data/aggregation-marker.png";
-const PARTICLE_REFRESH_DEBOUNCE_MS = 120;
 const markerTextureLoader = new THREE.TextureLoader();
 
 const canvas = document.getElementById("sceneCanvas");
@@ -84,8 +83,6 @@ let activeGroupIndex = 0;
 let activePhotoIndex = 0;
 let cycleToken = 0;
 let nextCycleTimerId = 0;
-let particleRefreshRequestId = 0;
-let particleRefreshTimerId = 0;
 let morphCompleteTimerId = 0;
 
 let beijingMarker = null;
@@ -95,11 +92,10 @@ let introFinished = false;
 
 const photoStage = document.getElementById("photoStage");
 const photoEl = document.getElementById("photo");
-const particleCanvas = document.getElementById("photoParticles");
-const pctx = particleCanvas.getContext("2d", { alpha: true, desynchronized: true });
 const photoThumbDock = document.getElementById("photoThumbDock");
 const poiLabel = document.getElementById("poiLabel");
 const capturedThumbs = new Set();
+let morphTargetThumbEl = null;
 
 const cameraFlight = {
   active: false,
@@ -126,8 +122,6 @@ const routeTempAhead = new THREE.Vector3();
 const routeTempHeading = new THREE.Vector3();
 
 const morphState = {
-  particles: [],
-  sourceCanvas: null,
   active: false,
   startedAt: 0,
   holdMs: 1200,
@@ -145,7 +139,6 @@ async function init() {
     throw new Error("PHOTO_SET 为空，请至少配置一张照片");
   }
   createMapToggle();
-  resizeParticleCanvas();
   await startPhotoCycle(0);
   window.addEventListener("resize", onResize);
   animate();
@@ -272,42 +265,11 @@ function clearNextCycleTimer() {
   }
 }
 
-function clearScheduledParticleRefresh() {
-  if (particleRefreshTimerId) {
-    clearTimeout(particleRefreshTimerId);
-    particleRefreshTimerId = 0;
-  }
-}
-
 function clearMorphCompleteTimer() {
   if (morphCompleteTimerId) {
     clearTimeout(morphCompleteTimerId);
     morphCompleteTimerId = 0;
   }
-}
-
-function nextParticleRefreshRequestId() {
-  particleRefreshRequestId += 1;
-  return particleRefreshRequestId;
-}
-
-async function refreshParticlesNow() {
-  clearScheduledParticleRefresh();
-  const requestId = nextParticleRefreshRequestId();
-  return prepareParticles(requestId);
-}
-
-function scheduleParticleRefresh() {
-  if (morphState.done) {
-    return;
-  }
-
-  const requestId = nextParticleRefreshRequestId();
-  clearScheduledParticleRefresh();
-  particleRefreshTimerId = window.setTimeout(() => {
-    particleRefreshTimerId = 0;
-    prepareParticles(requestId).catch(() => {});
-  }, PARTICLE_REFRESH_DEBOUNCE_MS);
 }
 
 async function startPhotoCycle(index) {
@@ -320,9 +282,8 @@ async function startPhotoCycle(index) {
   const token = cycleToken + 1;
   cycleToken = token;
   clearNextCycleTimer();
-  clearScheduledParticleRefresh();
   clearMorphCompleteTimer();
-  nextParticleRefreshRequestId();
+  clearMorphTargetThumb();
 
   activeGroupIndex = normalized;
   const activeGroup = getActiveGroup();
@@ -340,12 +301,10 @@ async function startPhotoCycle(index) {
   morphState.startedAt = 0;
   morphState.done = false;
   morphState.sparkle = 0;
-  morphState.particles = [];
-  morphState.sourceCanvas = null;
 
   photoStage.style.display = "";
   photoStage.classList.remove("done", "morphing");
-  pctx.clearRect(0, 0, particleCanvas.width, particleCanvas.height);
+  resetPhotoMorphTransform();
 
   if (poiLabel) {
     poiLabel.classList.remove("show");
@@ -364,7 +323,7 @@ async function startPhotoCycle(index) {
   }
 
   const startMapMode = getGroupStartMapMode(activeGroup);
-  await switchMap(startMapMode, { force: true, refreshParticles: false });
+  await switchMap(startMapMode, { force: true });
   if (token !== cycleToken) {
     return;
   }
@@ -374,15 +333,10 @@ async function startPhotoCycle(index) {
   camera.lookAt(controls.target);
   controls.update();
 
-  await refreshParticlesNow();
-  if (token !== cycleToken) {
-    return;
-  }
-
   runIntroSequence();
 }
 
-async function switchMap(mapMode, { force = false, refreshParticles = true } = {}) {
+async function switchMap(mapMode, { force = false } = {}) {
   if (!MAP_SOURCES[mapMode]) {
     return;
   }
@@ -412,11 +366,7 @@ async function switchMap(mapMode, { force = false, refreshParticles = true } = {
     currentMapMode = mapMode;
     updateMapToggleState();
 
-    if (refreshParticles && !morphState.done) {
-      await refreshParticlesNow();
-    } else {
-      updatePoiLabelPosition();
-    }
+    updatePoiLabelPosition();
   } finally {
     mapSwitchPending = false;
     setMapToggleEnabled(true);
@@ -1089,101 +1039,83 @@ function lonLatToLocalPosition(coord, yOffset = 0.28) {
   );
 }
 
-async function prepareParticles(requestId = particleRefreshRequestId) {
-  await ensureImageLoaded(photoEl);
-  if (requestId !== particleRefreshRequestId) {
-    return false;
+function resetPhotoMorphTransform() {
+  photoStage.style.setProperty("--photo-morph-x", "0px");
+  photoStage.style.setProperty("--photo-morph-y", "0px");
+  photoStage.style.setProperty("--photo-morph-scale", "1");
+}
+
+function createMorphTargetThumb(photoIndex = activePhotoIndex) {
+  if (!photoThumbDock) {
+    return null;
+  }
+
+  const photo = PHOTO_SET[photoIndex];
+  if (!photo) {
+    return null;
+  }
+
+  clearMorphTargetThumb();
+
+  const thumbKey = `${photoIndex}:${photo.src}`;
+  const thumb = document.createElement("div");
+  thumb.className = "photoThumb photoThumbTarget";
+  thumb.setAttribute("aria-hidden", "true");
+  thumb.dataset.thumbKey = thumbKey;
+
+  const img = document.createElement("img");
+  img.src = photo.src;
+  const focus = resolvePhotoFocus(photo);
+  img.style.objectPosition = `${focus.x}% ${focus.y}%`;
+  img.alt = `${normalizeDisplayText(photo.name, "未命名成员")} 缩略图`;
+  thumb.appendChild(img);
+
+  photoThumbDock.appendChild(thumb);
+  morphTargetThumbEl = thumb;
+  return thumb;
+}
+
+function clearMorphTargetThumb() {
+  if (!morphTargetThumbEl) {
+    return;
+  }
+
+  morphTargetThumbEl.remove();
+  morphTargetThumbEl = null;
+}
+
+function updatePhotoMorphTransform() {
+  const thumb = morphTargetThumbEl ?? createMorphTargetThumb();
+  if (!thumb) {
+    resetPhotoMorphTransform();
+    return;
   }
 
   const photoRect = getPhotoRect();
-  const sourceWidth = Math.max(1, Math.round(photoRect.width));
-  const sourceHeight = Math.max(1, Math.round(photoRect.height));
-
-  const sourceCanvas = document.createElement("canvas");
-  sourceCanvas.width = sourceWidth;
-  sourceCanvas.height = sourceHeight;
-  const sctx = sourceCanvas.getContext("2d");
-  if (!sctx) {
-    return false;
+  const thumbRect = thumb.getBoundingClientRect();
+  if (thumbRect.width <= 0 || thumbRect.height <= 0) {
+    resetPhotoMorphTransform();
+    return;
   }
 
-  drawImageCoverInRect(
-    sctx,
-    photoEl,
-    { x: 0, y: 0, width: sourceWidth, height: sourceHeight },
-    resolvePhotoFocus(getActivePhoto())
-  );
-  if (requestId !== particleRefreshRequestId) {
-    return false;
-  }
+  const photoCenterX = photoRect.x + photoRect.width / 2;
+  const photoCenterY = photoRect.y + photoRect.height / 2;
+  const thumbCenterX = thumbRect.left + thumbRect.width / 2;
+  const thumbCenterY = thumbRect.top + thumbRect.height / 2;
 
-  const area = Math.max(1, photoRect.width * photoRect.height);
-  const step = Math.max(7, Math.min(14, Math.round(Math.sqrt(area / 4600))));
+  const dx = thumbCenterX - photoCenterX;
+  const dy = thumbCenterY - photoCenterY;
+  const scale = THREE.MathUtils.clamp(thumbRect.width / Math.max(photoRect.width, 1), 0.08, 1);
 
-  const target = getMorphTargetScreenPosition();
-  const particles = [];
-
-  const maxX = Math.max(0, sourceWidth - 1);
-  const maxY = Math.max(0, sourceHeight - 1);
-
-  for (let y = 0; y <= maxY; y += step) {
-    for (let x = 0; x <= maxX; x += step) {
-      const startX = photoRect.x + x + (Math.random() - 0.5) * 1.8;
-      const startY = photoRect.y + y + (Math.random() - 0.5) * 1.8;
-
-      const dx = target.x - startX;
-      const dy = target.y - startY;
-      const angle = Math.atan2(dy, dx);
-      const swirl = 46 + Math.random() * 136;
-      const curveLift = (Math.random() - 0.5) * 210;
-      const cellW = Math.max(3, Math.round(step * (0.85 + Math.random() * 1.35)));
-      const cellH = Math.max(3, Math.round(step * (0.85 + Math.random() * 1.35)));
-      const sx = Math.max(0, Math.min(sourceWidth - cellW, Math.round(x - cellW * 0.5)));
-      const sy = Math.max(0, Math.min(sourceHeight - cellH, Math.round(y - cellH * 0.5)));
-
-      const c1 = {
-        x: startX + dx * 0.35 + Math.cos(angle + Math.PI / 2) * swirl,
-        y: startY + dy * 0.2 + Math.sin(angle + Math.PI / 2) * swirl + curveLift
-      };
-
-      const c2 = {
-        x: startX + dx * 0.7 + Math.cos(angle - Math.PI / 2) * (swirl * 0.45),
-        y: startY + dy * 0.85 + Math.sin(angle - Math.PI / 2) * (swirl * 0.45) - curveLift * 0.45
-      };
-
-      particles.push({
-        sx,
-        sy,
-        sw: cellW,
-        sh: cellH,
-        startX,
-        startY,
-        c1,
-        c2,
-        offset: Math.random() * 0.14,
-        wobbleAmp: 5 + Math.random() * 26,
-        wobbleFreq: 1.2 + Math.random() * 3.3,
-        phase: Math.random() * Math.PI * 2,
-        twist: (Math.random() - 0.5) * Math.PI * 1.7,
-        spin: (Math.random() - 0.5) * 0.62,
-        warpAmp: 0.08 + Math.random() * 0.44,
-        alpha: 0.64 + Math.random() * 0.34,
-        trail: Math.random()
-      });
-    }
-  }
-
-  if (requestId !== particleRefreshRequestId) {
-    return false;
-  }
-
-  morphState.sourceCanvas = sourceCanvas;
-  morphState.particles = particles;
-  return true;
+  photoStage.style.setProperty("--photo-morph-x", `${dx.toFixed(3)}px`);
+  photoStage.style.setProperty("--photo-morph-y", `${dy.toFixed(3)}px`);
+  photoStage.style.setProperty("--photo-morph-scale", `${scale.toFixed(4)}`);
 }
 
 function runIntroSequence() {
   morphState.startedAt = performance.now();
+  createMorphTargetThumb();
+  updatePhotoMorphTransform();
 
   controls.enabled = false;
   controls.autoRotate = false;
@@ -1202,6 +1134,14 @@ function pinCurrentPhotoThumbnail(photoIndex = activePhotoIndex) {
 
   const thumbKey = `${photoIndex}:${photo.src}`;
   if (capturedThumbs.has(thumbKey)) {
+    return;
+  }
+
+  if (morphTargetThumbEl && morphTargetThumbEl.dataset.thumbKey === thumbKey) {
+    const reusedThumb = morphTargetThumbEl;
+    reusedThumb.classList.remove("photoThumbTarget");
+    capturedThumbs.add(thumbKey);
+    morphTargetThumbEl = null;
     return;
   }
 
@@ -1237,6 +1177,7 @@ function pinActiveGroupThumbnails() {
 
 function clearThumbnailDock() {
   capturedThumbs.clear();
+  clearMorphTargetThumb();
   if (photoThumbDock) {
     photoThumbDock.replaceChildren();
   }
@@ -1255,92 +1196,12 @@ function drawMorphFrame(now) {
 
   if (!morphState.active) {
     morphState.active = true;
+    updatePhotoMorphTransform();
     photoStage.classList.add("morphing");
   }
 
   const tRaw = (elapsed - morphState.holdMs) / morphState.morphMs;
   const t = THREE.MathUtils.clamp(tRaw, 0, 1);
-  const eased = easeInOutCubic(t);
-
-  const target = getMorphTargetScreenPosition();
-  pctx.clearRect(0, 0, particleCanvas.width, particleCanvas.height);
-  pctx.globalCompositeOperation = "source-over";
-  pctx.imageSmoothingEnabled = true;
-
-  const sourceCanvas = morphState.sourceCanvas;
-  if (sourceCanvas) {
-    for (const p of morphState.particles) {
-      const tt = THREE.MathUtils.clamp(eased + p.offset * (1 - eased), 0, 1);
-      const remain = 1 - tt;
-
-      const x = cubicBezier(p.startX, p.c1.x, p.c2.x, target.x, tt);
-      const y = cubicBezier(p.startY, p.c1.y, p.c2.y, target.y, tt);
-      const phase = now * 0.0031 + p.phase + tt * Math.PI * 2.8;
-      const wobbleX = Math.sin(phase * p.wobbleFreq) * p.wobbleAmp * remain;
-      const wobbleY = Math.cos(phase * (0.62 + p.wobbleFreq * 0.42)) * p.wobbleAmp * 0.4 * remain;
-      const drawX = x + wobbleX;
-      const drawY = y + wobbleY;
-
-      const baseScale = Math.max(0.2, 1 - tt * 0.82);
-      const warp = 1 + Math.sin(phase * 1.28) * p.warpAmp * remain;
-      const scaleX = Math.max(0.16, baseScale * (0.92 + (warp - 1) * 1.1));
-      const scaleY = Math.max(0.16, baseScale * (1.02 - (warp - 1) * 0.72));
-      const rotation = p.twist * remain + p.spin * tt * Math.PI * 2;
-      const alpha = Math.max(0.03, p.alpha * (1 - tt * 0.9));
-
-      pctx.globalAlpha = alpha;
-      pctx.save();
-      pctx.translate(drawX, drawY);
-      pctx.rotate(rotation);
-      pctx.scale(scaleX, scaleY);
-      pctx.drawImage(
-        sourceCanvas,
-        p.sx,
-        p.sy,
-        p.sw,
-        p.sh,
-        -p.sw * 0.5,
-        -p.sh * 0.5,
-        p.sw,
-        p.sh
-      );
-      pctx.restore();
-
-      if (p.trail > 0.68 && tt < 0.96) {
-        const prevT = Math.max(0, tt - 0.08);
-        const prevX = cubicBezier(p.startX, p.c1.x, p.c2.x, target.x, prevT);
-        const prevY = cubicBezier(p.startY, p.c1.y, p.c2.y, target.y, prevT);
-        pctx.globalAlpha = alpha * 0.4 * remain;
-        pctx.strokeStyle = "rgba(255, 203, 124, 1)";
-        pctx.lineWidth = Math.max(0.5, (p.sw + p.sh) * 0.045 * remain);
-        pctx.beginPath();
-        pctx.moveTo(prevX, prevY);
-        pctx.lineTo(drawX, drawY);
-        pctx.stroke();
-      }
-    }
-  }
-
-  pctx.globalCompositeOperation = "lighter";
-  const glowRadius = 7 + (1 - eased) * 27;
-  const glow = pctx.createRadialGradient(
-    target.x,
-    target.y,
-    0,
-    target.x,
-    target.y,
-    glowRadius
-  );
-  glow.addColorStop(0, "rgba(255,228,170,0.95)");
-  glow.addColorStop(0.35, "rgba(255,200,110,0.6)");
-  glow.addColorStop(1, "rgba(255,165,84,0)");
-
-  pctx.fillStyle = glow;
-  pctx.beginPath();
-  pctx.arc(target.x, target.y, glowRadius, 0, Math.PI * 2);
-  pctx.fill();
-  pctx.globalCompositeOperation = "source-over";
-  pctx.globalAlpha = 1;
 
   if (t >= 1) {
     morphState.done = true;
@@ -1462,67 +1323,44 @@ function createRouteAvatarMover(photo, accentColor, order = 0) {
   mover.add(avatarRig);
   mover.userData.avatarRig = avatarRig;
 
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(0.62, 48),
-    new THREE.MeshBasicMaterial({
+  const baseHeight = 1.46;
+  const shadow = new THREE.Sprite(
+    new THREE.SpriteMaterial({
       color: 0x000000,
       transparent: true,
-      opacity: 0.25,
-      depthWrite: false,
-      side: THREE.DoubleSide
+      opacity: 0.24,
+      depthWrite: false
     })
   );
-  shadow.position.set(0.05, -0.03, -0.04);
+  shadow.center.set(0.5, 0.5);
+  shadow.position.set(0.06, -0.05, -0.06);
+  shadow.scale.set(baseHeight * 0.78, baseHeight * 1.04, 1);
   avatarRig.add(shadow);
 
-  const backPlate = new THREE.Mesh(
-    new THREE.CircleGeometry(0.62, 48),
-    new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.97,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    })
-  );
-  avatarRig.add(backPlate);
-
-  const ghostPlate = new THREE.Mesh(
-    new THREE.CircleGeometry(0.5, 40),
-    new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.33,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    })
-  );
-  ghostPlate.position.set(0.28, 0.02, -0.06);
-  avatarRig.add(ghostPlate);
-
-  const fallbackCore = new THREE.Mesh(
-    new THREE.SphereGeometry(0.31, 20, 20),
-    new THREE.MeshBasicMaterial({
+  const fallbackCore = new THREE.Sprite(
+    new THREE.SpriteMaterial({
       color: 0xb0d5ff,
       transparent: true,
-      opacity: 0.9
+      opacity: 0.92,
+      depthWrite: false
     })
   );
-  fallbackCore.position.z = 0.04;
+  fallbackCore.center.set(0.5, 0.06);
+  fallbackCore.scale.set(baseHeight * 0.82, baseHeight, 1);
   avatarRig.add(fallbackCore);
 
-  const avatar = new THREE.Mesh(
-    new THREE.CircleGeometry(0.56, 48),
-    new THREE.MeshBasicMaterial({
+  const avatar = new THREE.Sprite(
+    new THREE.SpriteMaterial({
       color: 0xffffff,
       transparent: true,
       opacity: 0,
       depthWrite: false,
-      alphaTest: 0.04,
-      side: THREE.DoubleSide
+      alphaTest: 0.04
     })
   );
-  avatar.position.z = 0.05;
+  avatar.center.set(0.5, 0.06);
+  avatar.scale.set(baseHeight * 0.82, baseHeight, 1);
+  avatar.position.z = 0.01;
   avatarRig.add(avatar);
 
   const photoSrc = photo?.src;
@@ -1536,18 +1374,16 @@ function createRouteAvatarMover(photo, accentColor, order = 0) {
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
-      const circularTexture = createCircularAvatarTexture(texture.image, resolvePhotoFocus(photo));
-      const finalTexture = circularTexture ?? texture;
-      finalTexture.colorSpace = THREE.SRGBColorSpace;
-      finalTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-      avatar.material.map = finalTexture;
+      avatar.material.map = texture;
       avatar.material.opacity = 1;
       avatar.material.needsUpdate = true;
       fallbackCore.visible = false;
 
-      if (finalTexture !== texture) {
-        texture.dispose();
+      const image = texture.image;
+      if (image && image.width && image.height) {
+        const aspect = image.width / image.height;
+        const clampedAspect = THREE.MathUtils.clamp(aspect, 0.6, 1.2);
+        avatar.scale.set(baseHeight * clampedAspect, baseHeight, 1);
       }
     },
     undefined,
@@ -1557,35 +1393,6 @@ function createRouteAvatarMover(photo, accentColor, order = 0) {
   );
 
   return mover;
-}
-
-function createCircularAvatarTexture(image, focus = { x: 50, y: 50 }) {
-  if (!image || !(image.width || image.naturalWidth) || !(image.height || image.naturalHeight)) {
-    return null;
-  }
-
-  const size = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    return null;
-  }
-
-  ctx.clearRect(0, 0, size, size);
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(size * 0.5, size * 0.5, size * 0.48, 0, Math.PI * 2);
-  ctx.closePath();
-  ctx.clip();
-  drawImageCover(ctx, image, 0, 0, size, size, focus);
-  ctx.restore();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-  return texture;
 }
 
 function startChinaFlightToBeijing(startTime = performance.now()) {
@@ -1729,7 +1536,7 @@ function handleArrivalAtBeijing(startTime = performance.now()) {
 
   if (ROUTE_VIEW_MODE === "two-stage" && currentMapMode !== "beijing") {
     stage2TransitionPending = true;
-    switchMap("beijing", { force: true, refreshParticles: false })
+    switchMap("beijing", { force: true })
       .then(() => {
         startHaidianFlyIn(performance.now());
       })
@@ -2038,10 +1845,6 @@ async function resolveStagePhotoSrc(group, fallbackPhoto) {
   return compositeSrc;
 }
 
-function drawImageCoverInRect(ctx, image, rect, focus = { x: 50, y: 50 }) {
-  drawImageCover(ctx, image, rect.x, rect.y, rect.width, rect.height, focus);
-}
-
 function getPhotoRect() {
   const rect = photoEl.getBoundingClientRect();
   const hasValidRect = rect.width > 0 && rect.height > 0;
@@ -2065,74 +1868,6 @@ function getPhotoRect() {
   };
 }
 
-function ensureImageLoaded(img) {
-  if (img.complete && img.naturalWidth > 0) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve, reject) => {
-    const handleLoad = () => {
-      cleanup();
-      resolve();
-    };
-    const handleError = () => {
-      cleanup();
-      reject(new Error(`图片加载失败: ${img.currentSrc || img.src}`));
-    };
-    const cleanup = () => {
-      img.removeEventListener("load", handleLoad);
-      img.removeEventListener("error", handleError);
-    };
-
-    img.addEventListener("load", handleLoad, { once: true });
-    img.addEventListener("error", handleError, { once: true });
-
-    if (img.complete) {
-      if (img.naturalWidth > 0) {
-        handleLoad();
-      } else {
-        handleError();
-      }
-    }
-  });
-}
-
-function getMorphTargetScreenPosition() {
-  const anchorOriginMarker = originMarkers[0];
-  if (anchorOriginMarker) {
-    const world = new THREE.Vector3();
-    anchorOriginMarker.getWorldPosition(world);
-    const projected = world.project(camera);
-    return {
-      x: (projected.x * 0.5 + 0.5) * window.innerWidth,
-      y: (-projected.y * 0.5 + 0.5) * window.innerHeight
-    };
-  }
-
-  return getBeijingScreenPosition();
-}
-
-function getBeijingScreenPosition() {
-  if (!beijingMarker) {
-    return { x: window.innerWidth * 0.54, y: window.innerHeight * 0.45 };
-  }
-
-  const world = new THREE.Vector3();
-  beijingMarker.getWorldPosition(world);
-
-  const projected = world.project(camera);
-
-  return {
-    x: (projected.x * 0.5 + 0.5) * window.innerWidth,
-    y: (-projected.y * 0.5 + 0.5) * window.innerHeight
-  };
-}
-
-function resizeParticleCanvas() {
-  particleCanvas.width = window.innerWidth;
-  particleCanvas.height = window.innerHeight;
-}
-
 function onResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -2140,10 +1875,8 @@ function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 
-  resizeParticleCanvas();
-
   if (!morphState.done) {
-    scheduleParticleRefresh();
+    updatePhotoMorphTransform();
   }
 
   updatePoiLabelPosition();
