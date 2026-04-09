@@ -92,6 +92,9 @@ let introFinished = false;
 
 const photoStage = document.getElementById("photoStage");
 const photoEl = document.getElementById("photo");
+const photoCardsEl = document.getElementById("photoCards");
+const photoNameEl = document.getElementById("photoName");
+const cornerNameEl = document.getElementById("cornerName");
 const photoThumbDock = document.getElementById("photoThumbDock");
 const poiLabel = document.getElementById("poiLabel");
 const capturedThumbs = new Set();
@@ -217,6 +220,74 @@ function getPhotosForCurrentMap(mapMode = currentMapMode) {
   return group.photos.filter((photo) => !isBeijingOrigin(photo));
 }
 
+function renderNameIntro(container, names, className) {
+  if (!container) {
+    return;
+  }
+
+  const normalizedNames = (Array.isArray(names) ? names : [])
+    .map((item) => normalizeDisplayText(item, ""))
+    .filter(Boolean);
+
+  if (!normalizedNames.length) {
+    container.textContent = "";
+    return;
+  }
+
+  if (normalizedNames.length === 1) {
+    container.textContent = normalizedNames[0];
+    return;
+  }
+
+  container.textContent = "";
+  const frag = document.createDocumentFragment();
+  for (const name of normalizedNames) {
+    const line = document.createElement("span");
+    line.className = className;
+    line.textContent = name;
+    frag.appendChild(line);
+  }
+  container.appendChild(frag);
+}
+
+function renderGroupIntroCards(photos) {
+  if (!photoCardsEl) {
+    return;
+  }
+
+  photoCardsEl.replaceChildren();
+  const normalizedPhotos = (Array.isArray(photos) ? photos : []).filter(Boolean);
+  if (normalizedPhotos.length <= 1) {
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const person of normalizedPhotos) {
+    const card = document.createElement("div");
+    card.className = "photoIntroCard";
+
+    const frame = document.createElement("div");
+    frame.className = "photoIntroCardFrame";
+
+    const img = document.createElement("img");
+    img.className = "photoIntroCardImage";
+    img.src = person.src;
+    const focus = resolvePhotoFocus(person);
+    img.style.objectPosition = `${focus.x}% ${focus.y}%`;
+    img.alt = normalizeDisplayText(person?.name, "未命名成员");
+    frame.appendChild(img);
+
+    const name = document.createElement("div");
+    name.className = "photoIntroCardName";
+    name.textContent = normalizeDisplayText(person?.name, "未命名成员");
+
+    card.append(frame, name);
+    frag.appendChild(card);
+  }
+
+  photoCardsEl.appendChild(frag);
+}
+
 async function applyActivePhoto() {
   const activeGroup = getActiveGroup();
   const photo = getActivePhoto();
@@ -236,12 +307,21 @@ async function applyActivePhoto() {
   const uniqueOrigins = [...new Set(safeOrigins)];
   const safeOrigin = uniqueOrigins[0] ?? "来源地未设置";
   const safeDate = normalizeDisplayText(photo.date, "日期未设置");
+  const hasMultiPeople = (activeGroup?.photos?.length ?? 0) > 1;
 
-  const stagePhotoSrc = await resolveStagePhotoSrc(activeGroup, photo);
+  const stagePhotoSrc = hasMultiPeople ? photo.src : await resolveStagePhotoSrc(activeGroup, photo);
   photoEl.src = stagePhotoSrc;
   const focus = resolvePhotoFocus(photo);
   photoEl.style.objectPosition = `${focus.x}% ${focus.y}%`;
   photoEl.alt = `${nameText}（${safeOrigin}，入职 ${safeDate}）`;
+  photoStage.classList.toggle("group-intro", hasMultiPeople);
+  renderGroupIntroCards(activeGroup?.photos ?? [photo]);
+  if (hasMultiPeople) {
+    photoNameEl.textContent = "";
+  } else {
+    renderNameIntro(photoNameEl, safeNames, "photoNameItem");
+  }
+  renderNameIntro(cornerNameEl, safeNames, "cornerNameItem");
 
   const hudHint = document.querySelector("#hud p");
   if (hudHint) {
