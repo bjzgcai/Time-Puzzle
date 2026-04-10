@@ -3,6 +3,12 @@
   --gold-soft: #d7b778;
   --gold-dim: #8d6a34;
   --ink-fade: rgba(12, 8, 4, 0.72);
+  --zgc-cyan: #64d8ff;
+  --zgc-blue-1: #0e2f66;
+  --zgc-blue-2: #081f45;
+  --zgc-blue-3: #04142e;
+  --zgc-orange-1: #ffbb59;
+  --zgc-orange-2: #ff8e2b;
 }
 
 * {
@@ -19,22 +25,71 @@ body {
 
 body {
   font-family: "Noto Serif SC", "Songti SC", serif;
+  background: #050d1f;
+}
+
+#appLayout {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+}
+
+#leftPane {
+  position: relative;
+  flex: 1 1 50%;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  border-right: 1px solid rgba(91, 66, 30, 0.42);
   background:
     radial-gradient(circle at 12% 18%, rgba(176, 131, 54, 0.13), transparent 46%),
     radial-gradient(circle at 85% 10%, rgba(135, 95, 30, 0.1), transparent 38%),
     linear-gradient(155deg, #0d0905 0%, #090603 52%, #050402 100%);
 }
 
+#rightPane {
+  position: relative;
+  flex: 1 1 50%;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.4vw, 20px);
+  padding: clamp(14px, 1.8vw, 26px);
+  color: #d9ecff;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(116, 207, 255, 0.18), transparent 46%),
+    radial-gradient(circle at 14% 82%, rgba(83, 137, 255, 0.2), transparent 52%),
+    linear-gradient(165deg, var(--zgc-blue-1) 0%, var(--zgc-blue-2) 48%, var(--zgc-blue-3) 100%);
+}
+
+#rightPane::before {
+  content: "";
+  position: absolute;
+  inset: -12% -8%;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 15% 23%, rgba(164, 226, 255, 0.6) 0 1px, transparent 1px),
+    radial-gradient(circle at 62% 30%, rgba(164, 226, 255, 0.52) 0 1px, transparent 1px),
+    radial-gradient(circle at 36% 74%, rgba(164, 226, 255, 0.44) 0 1px, transparent 1px),
+    radial-gradient(circle at 78% 70%, rgba(164, 226, 255, 0.42) 0 1px, transparent 1px);
+  background-size: 220px 220px, 260px 260px, 180px 180px, 300px 300px;
+  opacity: 0.58;
+}
+
 #sceneCanvas {
-  position: fixed;
+  position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
+  touch-action: none;
 }
 
 #hud {
-  position: fixed;
+  position: absolute;
   top: 4.8rem;
   left: 1.25rem;
   z-index: 8;
@@ -48,20 +103,20 @@ body {
 #hud h1 {
   margin: 0;
   font-family: "Cinzel", "Times New Roman", serif;
-  font-size: clamp(1.28rem, 2.2vw, 1.9rem);
+  font-size: clamp(1.16rem, 1.5vw, 1.74rem);
   letter-spacing: 0.18em;
   font-weight: 700;
 }
 
 #hud p {
   margin: 0.2rem 0 0;
-  font-size: clamp(0.76rem, 1.2vw, 0.92rem);
+  font-size: clamp(0.72rem, 0.95vw, 0.9rem);
   opacity: 0.8;
   letter-spacing: 0.1em;
 }
 
 #photoStage {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 12;
   pointer-events: none;
@@ -75,12 +130,12 @@ body {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: min(94vw, 1320px);
+  width: min(94%, 1120px);
   display: none;
   flex-wrap: wrap;
   justify-content: center;
   align-items: flex-start;
-  gap: clamp(50px, 5.2vw, 96px);
+  gap: clamp(24px, 3.2vw, 68px);
   opacity: 1;
   transition:
     opacity 520ms ease,
@@ -92,7 +147,7 @@ body {
 }
 
 .photoIntroCard {
-  min-width: clamp(150px, 16vw, 220px);
+  min-width: clamp(124px, 11vw, 188px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -100,7 +155,7 @@ body {
 }
 
 .photoIntroCardFrame {
-  width: clamp(150px, 16vw, 220px);
+  width: clamp(124px, 11vw, 188px);
   aspect-ratio: 3 / 4;
   overflow: hidden;
   border: 1px solid rgba(231, 197, 130, 0.46);
@@ -125,7 +180,7 @@ body {
   background: linear-gradient(150deg, rgba(38, 25, 11, 0.82), rgba(20, 13, 6, 0.76));
   color: #f2d8a4;
   font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: clamp(0.86rem, 1.28vw, 1.04rem);
+  font-size: clamp(0.82rem, 1vw, 0.96rem);
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: 0.07em;
@@ -147,9 +202,9 @@ body {
 #photoName {
   position: absolute;
   left: 50%;
-  bottom: calc(50% + clamp(120px, 16vw, 240px) + 100px);
+  bottom: calc(50% + clamp(92px, 12vw, 220px) + 82px);
   transform: translateX(-50%);
-  max-width: min(88vw, 680px);
+  max-width: min(88%, 540px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -157,7 +212,7 @@ body {
   padding: 0.1rem 0.3rem;
   color: #f2d8a4;
   font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: clamp(1rem, 1.9vw, 1.56rem);
+  font-size: clamp(0.94rem, 1.25vw, 1.36rem);
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: 0.08em;
@@ -172,15 +227,14 @@ body {
 }
 
 #poiLabel {
-  position: fixed;
+  position: absolute;
   left: 0;
   top: 0;
   z-index: 10;
   pointer-events: none;
   padding: 0.58rem 0.78rem 0.54rem;
   border: 1px solid rgba(227, 192, 128, 0.5);
-  background:
-    linear-gradient(150deg, rgba(52, 34, 15, 0.9), rgba(28, 18, 8, 0.82));
+  background: linear-gradient(150deg, rgba(52, 34, 15, 0.9), rgba(28, 18, 8, 0.82));
   color: #f0d6a4;
   box-shadow:
     0 10px 28px rgba(0, 0, 0, 0.34),
@@ -224,7 +278,7 @@ body {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: clamp(180px, 24vw, 360px);
+  width: clamp(150px, 18vw, 320px);
   aspect-ratio: 3 / 4;
   height: auto;
   object-fit: cover;
@@ -273,25 +327,25 @@ body {
 }
 
 #photoThumbDock {
-  position: fixed;
-  right: clamp(0.6rem, 2vw, 1.2rem);
-  bottom: clamp(0.6rem, 2.2vw, 1.35rem);
+  position: absolute;
+  right: clamp(0.55rem, 1.2vw, 1.05rem);
+  bottom: clamp(0.55rem, 1.4vw, 1.1rem);
   z-index: 11;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 0.55rem;
-  max-height: min(72vh, 520px);
+  gap: 0.5rem;
+  max-height: min(72%, 520px);
   overflow: hidden;
   pointer-events: none;
 }
 
 #cornerName {
-  position: fixed;
-  right: clamp(0.75rem, 2.2vw, 1.4rem);
-  bottom: clamp(0.75rem, 2.6vw, 1.45rem);
+  position: absolute;
+  right: clamp(0.65rem, 1.25vw, 1.15rem);
+  bottom: clamp(0.65rem, 1.5vw, 1.22rem);
   z-index: 13;
-  max-width: min(56vw, 420px);
+  max-width: min(72%, 360px);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -301,7 +355,7 @@ body {
   background: linear-gradient(150deg, rgba(38, 25, 11, 0.82), rgba(20, 13, 6, 0.76));
   color: #f3d9a6;
   font-family: "Noto Serif SC", "Songti SC", serif;
-  font-size: clamp(0.82rem, 1.28vw, 1.02rem);
+  font-size: clamp(0.78rem, 1vw, 0.98rem);
   font-weight: 600;
   line-height: 1.22;
   letter-spacing: 0.08em;
@@ -318,7 +372,7 @@ body {
 }
 
 .photoThumb {
-  width: clamp(56px, 7.5vw, 94px);
+  width: clamp(52px, 5.3vw, 88px);
   aspect-ratio: 3 / 4;
   border: 1px solid rgba(231, 197, 130, 0.5);
   border-radius: 8px;
@@ -363,10 +417,370 @@ body {
   }
 }
 
+#zgcHeader,
+#zgcMission,
+#zgcActivityPanel,
+#zgcGraphWrap {
+  position: relative;
+  z-index: 1;
+}
+
+#zgcHeader {
+  border: 1px solid rgba(139, 201, 255, 0.4);
+  border-radius: 14px;
+  padding: clamp(10px, 1.4vw, 15px) clamp(12px, 1.5vw, 18px);
+  background: linear-gradient(145deg, rgba(8, 29, 69, 0.82), rgba(5, 20, 50, 0.72));
+  box-shadow: inset 0 0 26px rgba(79, 162, 255, 0.12);
+}
+
+#zgcHeader h2 {
+  margin: 0;
+  font-size: clamp(1.04rem, 1.6vw, 1.5rem);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #e9f7ff;
+}
+
+#zgcHeader p {
+  margin: 0.3rem 0 0;
+  font-size: clamp(0.72rem, 0.95vw, 0.92rem);
+  letter-spacing: 0.07em;
+  color: rgba(211, 239, 255, 0.74);
+}
+
+#zgcMission {
+  margin: 0;
+  padding: 0.6rem 0.74rem;
+  border-left: 3px solid rgba(255, 178, 70, 0.75);
+  border-radius: 6px;
+  background: rgba(9, 31, 67, 0.52);
+  color: #f2f8ff;
+  font-size: clamp(0.84rem, 1vw, 1.02rem);
+  line-height: 1.5;
+}
+
+#zgcGraphWrap {
+  flex: 1 1 auto;
+  min-height: 320px;
+  border-radius: 22px;
+  border: 1px solid rgba(105, 173, 255, 0.28);
+  background:
+    radial-gradient(circle at 50% 54%, rgba(29, 106, 191, 0.18), transparent 52%),
+    linear-gradient(180deg, rgba(8, 29, 69, 0.42), rgba(4, 20, 46, 0.82));
+  box-shadow:
+    inset 0 0 36px rgba(88, 178, 255, 0.14),
+    0 10px 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+#zgcGraphBg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 52%, rgba(128, 201, 255, 0.24) 0, transparent 47%),
+    radial-gradient(circle at 50% 52%, rgba(128, 201, 255, 0.18) 0, transparent 62%);
+}
+
+#zgcGraphBg::before,
+#zgcGraphBg::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+#zgcGraphBg::before {
+  width: 74%;
+  aspect-ratio: 1;
+  border: 1px dashed rgba(124, 195, 255, 0.32);
+}
+
+#zgcGraphBg::after {
+  width: 52%;
+  aspect-ratio: 1;
+  border: 1px dotted rgba(124, 195, 255, 0.4);
+}
+
+#zgcLinks,
+#zgcJoinLayer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#zgcLinks {
+  pointer-events: none;
+}
+
+.zgcLink {
+  fill: none;
+  stroke: rgba(255, 209, 131, 0.7);
+  stroke-linecap: round;
+  transition:
+    stroke 320ms ease,
+    stroke-width 320ms ease,
+    filter 320ms ease,
+    opacity 320ms ease;
+}
+
+#zgcCore {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  width: clamp(118px, 15vw, 168px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border: 2px solid rgba(255, 219, 158, 0.9);
+  background: radial-gradient(circle at 35% 28%, #21568f 0%, #0f355f 45%, #0b2a4d 100%);
+  box-shadow:
+    0 0 0 4px rgba(99, 169, 255, 0.22),
+    0 0 26px rgba(89, 167, 255, 0.36),
+    inset 0 0 26px rgba(0, 0, 0, 0.34);
+  color: #f8f2e6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.36rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+#zgcCore.core-pulse {
+  animation: corePulse 720ms ease;
+}
+
+@keyframes corePulse {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  35% {
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.zgcCoreBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.25rem;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 215, 148, 0.72);
+  background: rgba(12, 29, 54, 0.6);
+  letter-spacing: 0.08em;
+  font-size: clamp(0.68rem, 1vw, 0.84rem);
+  font-family: "Cinzel", "Times New Roman", serif;
+}
+
+#zgcCore strong {
+  font-size: clamp(0.9rem, 1.16vw, 1.14rem);
+  letter-spacing: 0.04em;
+}
+
+.zgcDomain {
+  position: absolute;
+  left: calc(var(--x) * 1%);
+  top: calc(var(--y) * 1%);
+  width: clamp(88px, 9vw, 124px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%) scale(calc(var(--zgc-domain-layout-scale, 1) * (1 + var(--strength) * 0.16)));
+  border-radius: 999px;
+  border: 2px solid rgba(255, 196, 112, calc(0.66 + var(--strength) * 0.28));
+  background: radial-gradient(circle at 35% 30%, #ffd487, #ff9729);
+  color: #fff9ed;
+  font-weight: 600;
+  text-shadow: 0 1px 6px rgba(47, 24, 9, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0.45rem;
+  line-height: 1.22;
+  box-shadow:
+    0 0 calc(16px + var(--strength) * 20px) rgba(255, 165, 66, calc(0.46 + var(--strength) * 0.3)),
+    0 0 0 2px rgba(255, 188, 103, calc(0.24 + var(--strength) * 0.3));
+  transition:
+    transform 420ms cubic-bezier(0.21, 0.79, 0.2, 1),
+    border-color 320ms ease,
+    box-shadow 320ms ease,
+    filter 320ms ease;
+  filter: brightness(calc(0.96 + var(--strength) * 0.42));
+  user-select: none;
+  pointer-events: none;
+}
+
+.zgcDomain span {
+  font-size: clamp(0.8rem, 0.95vw, 1rem);
+  letter-spacing: 0.01em;
+  white-space: pre-line;
+}
+
+.zgcJoinAvatar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: clamp(52px, 5.1vw, 74px);
+  aspect-ratio: 3 / 4;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 210, 140, 0.88);
+  background: linear-gradient(160deg, rgba(37, 20, 9, 0.92), rgba(14, 7, 3, 0.94));
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.42),
+    0 0 16px rgba(255, 187, 94, 0.32);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.58);
+  transition:
+    left 1800ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    top 1800ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 1800ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 1800ms ease;
+}
+
+.zgcJoinAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#zgcActivityPanel {
+  flex: 0 0 auto;
+  border: 1px solid rgba(130, 194, 255, 0.34);
+  border-radius: 14px;
+  padding: 0.68rem 0.74rem 0.76rem;
+  background: linear-gradient(165deg, rgba(8, 31, 69, 0.72), rgba(5, 20, 48, 0.88));
+  box-shadow: inset 0 0 24px rgba(105, 180, 255, 0.09);
+}
+
+#zgcActivityPanel h3 {
+  margin: 0 0 0.5rem;
+  font-size: clamp(0.88rem, 1.04vw, 1.02rem);
+  letter-spacing: 0.08em;
+  color: #eaf5ff;
+}
+
+#zgcActivityList {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.48rem;
+  max-height: min(27vh, 280px);
+  overflow: auto;
+  padding-right: 0.18rem;
+}
+
+#zgcActivityList::-webkit-scrollbar {
+  width: 7px;
+}
+
+#zgcActivityList::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(128, 194, 255, 0.5);
+}
+
+.zgcActivityItem {
+  border: 1px solid rgba(122, 187, 255, 0.3);
+  border-radius: 10px;
+  background: rgba(8, 32, 68, 0.62);
+  padding: 0.5rem 0.54rem;
+  animation: activityIn 440ms cubic-bezier(0.18, 0.9, 0.2, 1);
+  transition:
+    border-color 280ms ease,
+    box-shadow 280ms ease,
+    background 280ms ease;
+}
+
+.zgcActivityItem.joined {
+  border-color: rgba(255, 191, 110, 0.64);
+  background: rgba(48, 56, 78, 0.56);
+  box-shadow: inset 0 0 18px rgba(255, 172, 82, 0.14);
+}
+
+@keyframes activityIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.zgcActivityName {
+  margin: 0;
+  color: #f9f2e5;
+  font-size: clamp(0.85rem, 1vw, 0.96rem);
+  font-weight: 700;
+}
+
+.zgcActivityMeta {
+  margin: 0.2rem 0 0.36rem;
+  color: rgba(210, 236, 255, 0.8);
+  font-size: clamp(0.72rem, 0.84vw, 0.84rem);
+}
+
+.zgcTagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.zgcTag {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 186, 101, 0.45);
+  background: rgba(255, 156, 53, 0.2);
+  color: #ffe7c3;
+  padding: 0.16rem 0.44rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+@media (max-width: 1180px) {
+  #appLayout {
+    flex-direction: column;
+  }
+
+  #leftPane,
+  #rightPane {
+    flex: none;
+    width: 100%;
+  }
+
+  #leftPane {
+    height: 54%;
+    border-right: none;
+    border-bottom: 1px solid rgba(83, 141, 212, 0.3);
+  }
+
+  #rightPane {
+    height: 46%;
+  }
+
+  #zgcGraphWrap {
+    min-height: 230px;
+  }
+
+  #zgcActivityList {
+    max-height: min(22vh, 190px);
+  }
+}
+
 @media (max-width: 768px) {
   #hud {
-    top: 4.35rem;
-    left: 0.9rem;
+    top: 3.9rem;
+    left: 0.78rem;
   }
 
   #hud h1 {
@@ -374,14 +788,23 @@ body {
   }
 
   #photoThumbDock {
-    gap: 0.45rem;
-    max-height: 54vh;
+    gap: 0.4rem;
+    max-height: 54%;
   }
 
   #cornerName {
-    right: 0.62rem;
-    bottom: 0.62rem;
-    max-width: 62vw;
+    right: 0.58rem;
+    bottom: 0.58rem;
+    max-width: 74%;
     letter-spacing: 0.06em;
+  }
+
+  #zgcMission {
+    font-size: 0.82rem;
+  }
+
+  .zgcDomain {
+    width: clamp(74px, 16vw, 108px);
+    padding: 0.34rem;
   }
 }

@@ -25,26 +25,56 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <canvas id="sceneCanvas"></canvas>
+    <div id="appLayout">
+      <section id="leftPane">
+        <canvas id="sceneCanvas"></canvas>
 
-    <div id="hud">
-      <h1>山河暗金图</h1>
-      <p>拖拽旋转 · 滚轮缩放</p>
+        <div id="hud">
+          <h1>山河暗金图</h1>
+          <p>拖拽旋转 · 滚轮缩放</p>
+        </div>
+
+        <div id="poiLabel" aria-hidden="true">
+          <span>北京市 · 海淀区</span>
+          <strong>海淀大悦信息科技园</strong>
+        </div>
+
+        <div id="photoStage" aria-hidden="true">
+          <div id="photoCards"></div>
+          <div id="photoName"></div>
+          <img id="photo" src="./data/刘铁岩.png" alt="portrait" />
+        </div>
+
+        <div id="photoThumbDock" aria-hidden="true"></div>
+        <div id="cornerName" aria-hidden="true"></div>
+      </section>
+
+      <aside id="rightPane" aria-label="ZGC 人员加入与网络扩展">
+        <header id="zgcHeader">
+          <h2>ZGC 人员加入与网络扩展</h2>
+          <p>Personnel Joining & Network Expansion</p>
+        </header>
+
+        <p id="zgcMission">
+          ZGC 学院宗旨：培养极基础，极应用，极交叉的 AI 领军人才。
+        </p>
+
+        <div id="zgcGraphWrap">
+          <div id="zgcGraphBg" aria-hidden="true"></div>
+          <svg id="zgcLinks" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <div id="zgcJoinLayer" aria-hidden="true"></div>
+          <div id="zgcCore">
+            <span class="zgcCoreBadge">ZGC</span>
+            <strong>学院 Base</strong>
+          </div>
+        </div>
+
+        <section id="zgcActivityPanel" aria-label="活动时光碎片">
+          <h3>时光碎片</h3>
+          <div id="zgcActivityList"></div>
+        </section>
+      </aside>
     </div>
-
-    <div id="poiLabel" aria-hidden="true">
-      <span>北京市 · 海淀区</span>
-      <strong>海淀大悦信息科技园</strong>
-    </div>
-
-    <div id="photoStage" aria-hidden="true">
-      <div id="photoCards"></div>
-      <div id="photoName"></div>
-      <img id="photo" src="./data/刘铁岩.png" alt="portrait" />
-    </div>
-
-    <div id="photoThumbDock" aria-hidden="true"></div>
-    <div id="cornerName" aria-hidden="true"></div>
 
     <script type="module" src="./main.js"></script>
   </body>

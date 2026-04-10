@@ -16,6 +16,7 @@ const CONTROL_HOME = new THREE.Vector3(0, 1.4, 0);
 const HAIDIAN_MARKER_ICON_SRC = "./data/aggregation-marker.png";
 const markerTextureLoader = new THREE.TextureLoader();
 
+const leftPaneEl = document.getElementById("leftPane");
 const canvas = document.getElementById("sceneCanvas");
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -24,7 +25,8 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: "high-performance"
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
+const initialSceneSize = getSceneSize();
+renderer.setSize(initialSceneSize.width, initialSceneSize.height);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.22;
@@ -35,7 +37,7 @@ scene.fog = new THREE.Fog(0x090603, 56, 138);
 
 const camera = new THREE.PerspectiveCamera(
   46,
-  window.innerWidth / window.innerHeight,
+  initialSceneSize.width / initialSceneSize.height,
   0.1,
   480
 );
@@ -97,6 +99,11 @@ const photoNameEl = document.getElementById("photoName");
 const cornerNameEl = document.getElementById("cornerName");
 const photoThumbDock = document.getElementById("photoThumbDock");
 const poiLabel = document.getElementById("poiLabel");
+const zgcGraphWrapEl = document.getElementById("zgcGraphWrap");
+const zgcLinksEl = document.getElementById("zgcLinks");
+const zgcJoinLayerEl = document.getElementById("zgcJoinLayer");
+const zgcCoreEl = document.getElementById("zgcCore");
+const zgcActivityListEl = document.getElementById("zgcActivityList");
 const capturedThumbs = new Set();
 let morphTargetThumbEl = null;
 
@@ -133,6 +140,40 @@ const morphState = {
   sparkle: 0
 };
 
+const ZGC_CORE_POINT = { x: 50, y: 52 };
+const ZGC_DOMAIN_MAX_STRENGTH_SCALE = 1.16;
+const ZGC_DOMAIN_DEFS = [
+  { key: "ai_science", label: "AI+Science", x: 67, y: 28 },
+  { key: "ai_industry", label: "AI+Industry", x: 80, y: 46 },
+  { key: "ai_society", label: "AI+Society", x: 74, y: 69 },
+  { key: "ai_core", label: "AI Core", x: 50, y: 79 },
+  { key: "ai_education", label: "AI教育", x: 26, y: 69 },
+  { key: "edu_talent", label: "教科人培养", x: 20, y: 46 },
+  { key: "smart_campus", label: "智慧校园\n(含 AI+智慧校园)", x: 33, y: 28 }
+];
+
+const ZGC_DOMAIN_ALIAS_MAP = {
+  "AI+Science": "ai_science",
+  "AI+科研": "ai_science",
+  "AI+Industry": "ai_industry",
+  "AI+Society": "ai_society",
+  "AI Core": "ai_core",
+  AICore: "ai_core",
+  "AI教育": "ai_education",
+  "教科人培养": "edu_talent",
+  "智慧校园": "smart_campus",
+  "AI+智慧校园": "smart_campus",
+  "智慧校园（含 AI+智慧校园）": "smart_campus",
+  "智慧校园(含 AI+智慧校园)": "smart_campus"
+};
+
+const zgcDomainEls = new Map();
+const zgcDomainLinkEls = new Map();
+const zgcActivityEls = new Map();
+const zgcDomainLevels = new Map();
+let zgcJoinTimers = [];
+let zgcJoinSequenceToken = 0;
+
 init().catch((err) => {
   console.error(err);
 });
@@ -141,10 +182,538 @@ async function init() {
   if (!PHOTO_SET.length || !PHOTO_GROUPS.length) {
     throw new Error("PHOTO_SET 为空，请至少配置一张照片");
   }
+  setupZgcDomainNetwork();
+  onResize();
   createMapToggle();
   await startPhotoCycle(0);
   window.addEventListener("resize", onResize);
   animate();
+}
+
+function getSceneSize() {
+  return {
+    width: Math.max(1, Math.round(leftPaneEl?.clientWidth || window.innerWidth)),
+    height: Math.max(1, Math.round(leftPaneEl?.clientHeight || window.innerHeight))
+  };
+}
+
+function setupZgcDomainNetwork() {
+  if (!zgcGraphWrapEl || !zgcLinksEl) {
+    return;
+  }
+
+  clearZgcJoinTimers();
+  zgcDomainEls.clear();
+  zgcDomainLinkEls.clear();
+  zgcDomainLevels.clear();
+  zgcActivityEls.clear();
+
+  zgcGraphWrapEl.querySelectorAll(".zgcDomain").forEach((el) => {
+    el.remove();
+  });
+  zgcLinksEl.replaceChildren();
+
+  const svgNs = "http://www.w3.org/2000/svg";
+  for (const domain of ZGC_DOMAIN_DEFS) {
+    const link = document.createElementNS(svgNs, "line");
+    link.classList.add("zgcLink");
+    link.setAttribute("x1", String(ZGC_CORE_POINT.x));
+    link.setAttribute("y1", String(ZGC_CORE_POINT.y));
+    link.setAttribute("x2", String(domain.x));
+    link.setAttribute("y2", String(domain.y));
+    zgcLinksEl.appendChild(link);
+    zgcDomainLinkEls.set(domain.key, link);
+
+    const node = document.createElement("div");
+    node.className = "zgcDomain";
+    node.style.setProperty("--x", String(domain.x));
+    node.style.setProperty("--y", String(domain.y));
+    node.style.setProperty("--strength", "0");
+
+    const label = document.createElement("span");
+    label.textContent = domain.label;
+    node.appendChild(label);
+
+    zgcGraphWrapEl.appendChild(node);
+    zgcDomainEls.set(domain.key, node);
+    zgcDomainLevels.set(domain.key, 0);
+    updateZgcDomainVisual(domain.key);
+  }
+
+  layoutZgcDomainNodes();
+  requestAnimationFrame(() => {
+    layoutZgcDomainNodes();
+  });
+
+  renderZgcEmptyActivity("等待成员加入...");
+}
+
+function layoutZgcDomainNodes() {
+  if (!zgcGraphWrapEl || !zgcLinksEl || !zgcCoreEl || !zgcDomainEls.size) {
+    return;
+  }
+
+  const wrapRect = zgcGraphWrapEl.getBoundingClientRect();
+  const coreRect = zgcCoreEl.getBoundingClientRect();
+  if (wrapRect.width <= 0 || wrapRect.height <= 0 || coreRect.width <= 0 || coreRect.height <= 0) {
+    return;
+  }
+
+  const coreCenter = {
+    x: coreRect.left - wrapRect.left + coreRect.width / 2,
+    y: coreRect.top - wrapRect.top + coreRect.height / 2
+  };
+  const coreRadius = Math.max(coreRect.width, coreRect.height) / 2;
+  const edgePadding = 4;
+  const nodeGap = 10;
+  const coreGap = 12;
+  const minLayoutScale = 0.56;
+  const scaleStep = 0.04;
+
+  const layoutNodes = ZGC_DOMAIN_DEFS.map((def) => {
+    const node = zgcDomainEls.get(def.key);
+    const link = zgcDomainLinkEls.get(def.key);
+    if (!node || !link) {
+      return null;
+    }
+    const baseRadius = Math.max(node.offsetWidth, node.offsetHeight) / 2;
+    return {
+      key: def.key,
+      node,
+      link,
+      targetX: (def.x / 100) * wrapRect.width,
+      targetY: (def.y / 100) * wrapRect.height,
+      baseRadius
+    };
+  }).filter(Boolean);
+
+  if (!layoutNodes.length) {
+    return;
+  }
+
+  let best = null;
+  for (let scale = 1; scale >= minLayoutScale; scale -= scaleStep) {
+    const attempt = resolveDomainLayout({
+      layoutNodes,
+      width: wrapRect.width,
+      height: wrapRect.height,
+      coreCenter,
+      coreRadius,
+      edgePadding,
+      nodeGap,
+      coreGap,
+      radiusScale: scale * ZGC_DOMAIN_MAX_STRENGTH_SCALE
+    });
+
+    attempt.layoutScale = scale;
+    if (!best || attempt.maxOverlapPx < best.maxOverlapPx) {
+      best = attempt;
+    }
+    if (attempt.maxOverlapPx <= 0.5) {
+      best = attempt;
+      break;
+    }
+  }
+
+  if (!best) {
+    return;
+  }
+
+  zgcGraphWrapEl.style.setProperty("--zgc-domain-layout-scale", best.layoutScale.toFixed(3));
+  const coreXPercent = (coreCenter.x / wrapRect.width) * 100;
+  const coreYPercent = (coreCenter.y / wrapRect.height) * 100;
+
+  for (const placement of best.positions) {
+    const domain = layoutNodes.find((item) => item.key === placement.key);
+    if (!domain) {
+      continue;
+    }
+    const xPercent = THREE.MathUtils.clamp((placement.x / wrapRect.width) * 100, 0, 100);
+    const yPercent = THREE.MathUtils.clamp((placement.y / wrapRect.height) * 100, 0, 100);
+    domain.node.style.setProperty("--x", xPercent.toFixed(3));
+    domain.node.style.setProperty("--y", yPercent.toFixed(3));
+    domain.link.setAttribute("x1", coreXPercent.toFixed(3));
+    domain.link.setAttribute("y1", coreYPercent.toFixed(3));
+    domain.link.setAttribute("x2", xPercent.toFixed(3));
+    domain.link.setAttribute("y2", yPercent.toFixed(3));
+  }
+}
+
+function resolveDomainLayout({
+  layoutNodes,
+  width,
+  height,
+  coreCenter,
+  coreRadius,
+  edgePadding,
+  nodeGap,
+  coreGap,
+  radiusScale
+}) {
+  const positions = layoutNodes.map((item) => ({
+    key: item.key,
+    x: item.targetX,
+    y: item.targetY,
+    targetX: item.targetX,
+    targetY: item.targetY,
+    radius: item.baseRadius * radiusScale
+  }));
+
+  const clampToBounds = (node) => {
+    const minX = edgePadding + node.radius;
+    const maxX = width - edgePadding - node.radius;
+    const minY = edgePadding + node.radius;
+    const maxY = height - edgePadding - node.radius;
+    node.x = minX > maxX ? width / 2 : THREE.MathUtils.clamp(node.x, minX, maxX);
+    node.y = minY > maxY ? height / 2 : THREE.MathUtils.clamp(node.y, minY, maxY);
+  };
+
+  for (const node of positions) {
+    clampToBounds(node);
+  }
+
+  const iterations = 210;
+  for (let step = 0; step < iterations; step += 1) {
+    let movedPx = 0;
+
+    for (const node of positions) {
+      const pull = 0.034;
+      node.x += (node.targetX - node.x) * pull;
+      node.y += (node.targetY - node.y) * pull;
+    }
+
+    for (const node of positions) {
+      const dx = node.x - coreCenter.x;
+      const dy = node.y - coreCenter.y;
+      const dist = Math.hypot(dx, dy) || 0.0001;
+      const minDist = node.radius + coreRadius + coreGap;
+      if (dist < minDist) {
+        const push = minDist - dist;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        node.x += ux * push;
+        node.y += uy * push;
+        movedPx += push;
+      }
+    }
+
+    for (let i = 0; i < positions.length; i += 1) {
+      for (let j = i + 1; j < positions.length; j += 1) {
+        const first = positions[i];
+        const second = positions[j];
+        const dx = second.x - first.x;
+        const dy = second.y - first.y;
+        const dist = Math.hypot(dx, dy) || 0.0001;
+        const minDist = first.radius + second.radius + nodeGap;
+        if (dist < minDist) {
+          const overlap = (minDist - dist) * 0.5;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          first.x -= ux * overlap;
+          first.y -= uy * overlap;
+          second.x += ux * overlap;
+          second.y += uy * overlap;
+          movedPx += overlap * 2;
+        }
+      }
+    }
+
+    for (const node of positions) {
+      const beforeX = node.x;
+      const beforeY = node.y;
+      clampToBounds(node);
+      movedPx += Math.abs(node.x - beforeX) + Math.abs(node.y - beforeY);
+    }
+
+    if (movedPx <= 0.05) {
+      break;
+    }
+  }
+
+  let maxOverlapPx = 0;
+  for (const node of positions) {
+    const dx = node.x - coreCenter.x;
+    const dy = node.y - coreCenter.y;
+    const dist = Math.hypot(dx, dy);
+    const coreOverlap = node.radius + coreRadius + coreGap - dist;
+    maxOverlapPx = Math.max(maxOverlapPx, coreOverlap);
+  }
+
+  for (let i = 0; i < positions.length; i += 1) {
+    for (let j = i + 1; j < positions.length; j += 1) {
+      const first = positions[i];
+      const second = positions[j];
+      const dist = Math.hypot(second.x - first.x, second.y - first.y);
+      const pairOverlap = first.radius + second.radius + nodeGap - dist;
+      maxOverlapPx = Math.max(maxOverlapPx, pairOverlap);
+    }
+  }
+
+  return {
+    positions,
+    maxOverlapPx
+  };
+}
+
+function normalizeDomainKey(rawDomain) {
+  const safeDomain = normalizeDisplayText(rawDomain, "");
+  if (!safeDomain) {
+    return null;
+  }
+  return ZGC_DOMAIN_ALIAS_MAP[safeDomain] ?? null;
+}
+
+function collectDomainKeys(expertises) {
+  const keys = [];
+  const seen = new Set();
+  const safeExpertises = Array.isArray(expertises) ? expertises : [];
+  for (const domain of safeExpertises) {
+    const key = normalizeDomainKey(domain);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
+function getDomainLabel(domainKey) {
+  return ZGC_DOMAIN_DEFS.find((item) => item.key === domainKey)?.label.replace(/\n/g, " ");
+}
+
+function resetZgcNetworkProgress() {
+  clearZgcJoinTimers();
+  for (const domain of ZGC_DOMAIN_DEFS) {
+    zgcDomainLevels.set(domain.key, 0);
+    updateZgcDomainVisual(domain.key);
+  }
+  renderZgcEmptyActivity("新一轮人员加入即将开始...");
+}
+
+function updateZgcDomainVisual(domainKey) {
+  const node = zgcDomainEls.get(domainKey);
+  const link = zgcDomainLinkEls.get(domainKey);
+  const level = zgcDomainLevels.get(domainKey) ?? 0;
+  const strength = THREE.MathUtils.clamp(level / 6, 0, 1);
+
+  if (node) {
+    node.style.setProperty("--strength", strength.toFixed(3));
+  }
+
+  if (link) {
+    const strokeR = Math.round(246 + strength * 9);
+    const strokeG = Math.round(192 + strength * 36);
+    const strokeB = Math.round(118 + strength * 56);
+    const opacity = (0.56 + strength * 0.36).toFixed(3);
+    const glow = (4 + strength * 12).toFixed(2);
+    link.style.stroke = `rgba(${strokeR}, ${strokeG}, ${strokeB}, ${opacity})`;
+    link.style.strokeWidth = (1.45 + strength * 2.2).toFixed(2);
+    link.style.filter = `drop-shadow(0 0 ${glow}px rgba(255, 181, 101, ${0.38 + strength * 0.42}))`;
+  }
+}
+
+function pulseZgcCore() {
+  if (!zgcCoreEl) {
+    return;
+  }
+  zgcCoreEl.classList.remove("core-pulse");
+  void zgcCoreEl.offsetWidth;
+  zgcCoreEl.classList.add("core-pulse");
+}
+
+function boostZgcDomains(expertises) {
+  const keys = collectDomainKeys(expertises);
+  if (!keys.length) {
+    return;
+  }
+
+  for (const key of keys) {
+    const current = zgcDomainLevels.get(key) ?? 0;
+    zgcDomainLevels.set(key, Math.min(7, current + 1));
+    updateZgcDomainVisual(key);
+  }
+  pulseZgcCore();
+}
+
+function clearZgcJoinTimers() {
+  for (const timerId of zgcJoinTimers) {
+    clearTimeout(timerId);
+  }
+  zgcJoinTimers = [];
+  if (zgcJoinLayerEl) {
+    zgcJoinLayerEl.replaceChildren();
+  }
+}
+
+function buildActivityKey(groupDate, globalIndex, localIndex) {
+  return `${groupDate}:${globalIndex}:${localIndex}`;
+}
+
+function renderZgcEmptyActivity(text) {
+  if (!zgcActivityListEl) {
+    return;
+  }
+  zgcActivityEls.clear();
+  const hint = document.createElement("div");
+  hint.className = "zgcActivityItem";
+  const name = document.createElement("p");
+  name.className = "zgcActivityName";
+  name.textContent = normalizeDisplayText(text, "等待成员加入...");
+  hint.appendChild(name);
+  zgcActivityListEl.replaceChildren(hint);
+}
+
+function renderZgcActivities(group) {
+  if (!zgcActivityListEl) {
+    return;
+  }
+
+  const photos = group?.photos ?? [];
+  const indices = group?.indices ?? [];
+  zgcActivityEls.clear();
+  zgcActivityListEl.replaceChildren();
+
+  if (!photos.length) {
+    renderZgcEmptyActivity("本轮暂无活动");
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < photos.length; i += 1) {
+    const person = photos[i];
+    const activityKey = buildActivityKey(group?.date ?? "unknown", indices[i] ?? i, i);
+    const item = document.createElement("article");
+    item.className = "zgcActivityItem";
+    item.dataset.activityKey = activityKey;
+
+    const name = document.createElement("p");
+    name.className = "zgcActivityName";
+    name.textContent = normalizeDisplayText(person?.name, "未命名成员");
+
+    const meta = document.createElement("p");
+    meta.className = "zgcActivityMeta";
+    const date = normalizeDisplayText(person?.date, group?.date ?? "日期未设置");
+    const city = normalizeDisplayText(person?.originCity, "来源地未设置");
+    meta.textContent = `${date} · ${city}`;
+
+    const tags = document.createElement("div");
+    tags.className = "zgcTagRow";
+    const domains = collectDomainKeys(person?.expertises);
+    const displayDomains = domains.length
+      ? domains.map((key) => getDomainLabel(key)).filter(Boolean)
+      : ["未标注领域"];
+
+    for (const domainLabel of displayDomains) {
+      const tag = document.createElement("span");
+      tag.className = "zgcTag";
+      tag.textContent = domainLabel;
+      tags.appendChild(tag);
+    }
+
+    item.append(name, meta, tags);
+    frag.appendChild(item);
+    zgcActivityEls.set(activityKey, item);
+  }
+
+  zgcActivityListEl.appendChild(frag);
+  zgcActivityListEl.scrollTop = 0;
+}
+
+function markZgcActivityJoined(activityKey) {
+  const activityEl = zgcActivityEls.get(activityKey);
+  if (!activityEl) {
+    return;
+  }
+  activityEl.classList.add("joined");
+}
+
+function getZgcJoinStartPoint(order, total) {
+  const totalCount = Math.max(total, 1);
+  const baseAngle = (order / totalCount) * Math.PI * 2 - Math.PI * 0.34;
+  const jitterAngle = (Math.random() - 0.5) * 0.26;
+  const jitterRadius = (Math.random() - 0.5) * 5.2;
+  const radiusX = 42 + jitterRadius;
+  const radiusY = 38 + jitterRadius * 0.72;
+  const x = ZGC_CORE_POINT.x + Math.cos(baseAngle + jitterAngle) * radiusX;
+  const y = ZGC_CORE_POINT.y + Math.sin(baseAngle + jitterAngle) * radiusY;
+  return {
+    x: THREE.MathUtils.clamp(x, 4, 96),
+    y: THREE.MathUtils.clamp(y, 6, 96)
+  };
+}
+
+function spawnZgcJoinAvatar(person, order, total) {
+  if (!zgcJoinLayerEl) {
+    return;
+  }
+
+  const start = getZgcJoinStartPoint(order, total);
+  const avatar = document.createElement("div");
+  avatar.className = "zgcJoinAvatar";
+  avatar.style.left = `${start.x}%`;
+  avatar.style.top = `${start.y}%`;
+
+  const img = document.createElement("img");
+  img.src = person?.src || "";
+  img.alt = `${normalizeDisplayText(person?.name, "成员")} 飞入`;
+  const focus = resolvePhotoFocus(person);
+  img.style.objectPosition = `${focus.x}% ${focus.y}%`;
+  avatar.appendChild(img);
+
+  zgcJoinLayerEl.appendChild(avatar);
+
+  requestAnimationFrame(() => {
+    avatar.style.opacity = "0.95";
+    avatar.style.left = `${ZGC_CORE_POINT.x}%`;
+    avatar.style.top = `${ZGC_CORE_POINT.y}%`;
+    avatar.style.transform = "translate(-50%, -50%) scale(0.26)";
+  });
+
+  const fadeTimer = window.setTimeout(() => {
+    avatar.style.opacity = "0.06";
+    avatar.style.transform = "translate(-50%, -50%) scale(0.14)";
+  }, 1160);
+  const removeTimer = window.setTimeout(() => {
+    avatar.remove();
+  }, 2320);
+  zgcJoinTimers.push(fadeTimer, removeTimer);
+}
+
+function playZgcGroupJoinSequence(group, cycleId) {
+  const photos = group?.photos ?? [];
+  const indices = group?.indices ?? [];
+  const sequenceToken = zgcJoinSequenceToken + 1;
+  zgcJoinSequenceToken = sequenceToken;
+  clearZgcJoinTimers();
+  renderZgcActivities(group);
+
+  if (!photos.length) {
+    return;
+  }
+
+  for (let i = 0; i < photos.length; i += 1) {
+    const person = photos[i];
+    const activityKey = buildActivityKey(group?.date ?? "unknown", indices[i] ?? i, i);
+    const queueDelay = 240 + i * 520;
+    const launchTimer = window.setTimeout(() => {
+      if (cycleId !== cycleToken || sequenceToken !== zgcJoinSequenceToken) {
+        return;
+      }
+
+      spawnZgcJoinAvatar(person, i, photos.length);
+
+      const settleTimer = window.setTimeout(() => {
+        if (cycleId !== cycleToken || sequenceToken !== zgcJoinSequenceToken) {
+          return;
+        }
+        markZgcActivityJoined(activityKey);
+        boostZgcDomains(person?.expertises);
+      }, 860);
+      zgcJoinTimers.push(settleTimer);
+    }, queueDelay);
+
+    zgcJoinTimers.push(launchTimer);
+  }
 }
 
 function normalizeDisplayText(value, fallback = "") {
@@ -401,6 +970,7 @@ async function startPhotoCycle(index) {
   if (token !== cycleToken) {
     return;
   }
+  playZgcGroupJoinSequence(activeGroup, token);
 
   const startMapMode = getGroupStartMapMode(activeGroup);
   await switchMap(startMapMode, { force: true });
@@ -463,7 +1033,7 @@ function createMapToggle() {
   panel.setAttribute("role", "group");
   panel.setAttribute("aria-label", "Map mode");
   Object.assign(panel.style, {
-    position: "fixed",
+    position: "absolute",
     top: "14px",
     left: "14px",
     zIndex: "28",
@@ -510,7 +1080,7 @@ function createMapToggle() {
   }
 
   mapToggleEl = panel;
-  document.body.appendChild(panel);
+  (leftPaneEl ?? document.body).appendChild(panel);
   updateMapToggleState();
 }
 
@@ -1687,6 +2257,7 @@ function queueNextPhotoCycle() {
   nextCycleTimerId = window.setTimeout(() => {
     if (nextIndex === 0) {
       clearThumbnailDock();
+      resetZgcNetworkProgress();
     }
     startPhotoCycle(nextIndex).catch((err) => {
       console.error(err);
@@ -1783,8 +2354,9 @@ function updatePoiLabelPosition() {
   }
 
   poiLabel.style.opacity = "";
-  const x = (projected.x * 0.5 + 0.5) * window.innerWidth;
-  const y = (-projected.y * 0.5 + 0.5) * window.innerHeight;
+  const sceneSize = getSceneSize();
+  const x = (projected.x * 0.5 + 0.5) * sceneSize.width;
+  const y = (-projected.y * 0.5 + 0.5) * sceneSize.height;
   poiLabel.style.transform = `translate(${x}px, ${y}px) translate(24px, -58px)`;
 }
 
@@ -1938,21 +2510,23 @@ function getPhotoRect() {
     };
   }
 
-  const width = Math.max(180, Math.min(window.innerWidth * 0.24, 360));
+  const sceneSize = getSceneSize();
+  const width = Math.max(150, Math.min(sceneSize.width * 0.38, 320));
   const height = width / 0.75;
   return {
-    x: (window.innerWidth - width) / 2,
-    y: (window.innerHeight - height) / 2,
+    x: (sceneSize.width - width) / 2,
+    y: (sceneSize.height - height) / 2,
     width,
     height
   };
 }
 
 function onResize() {
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  const sceneSize = getSceneSize();
+  renderer.setSize(sceneSize.width, sceneSize.height);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = sceneSize.width / sceneSize.height;
   camera.updateProjectionMatrix();
 
   if (!morphState.done) {
@@ -1960,6 +2534,7 @@ function onResize() {
   }
 
   updatePoiLabelPosition();
+  layoutZgcDomainNodes();
 }
 
 function animate(now = performance.now()) {
